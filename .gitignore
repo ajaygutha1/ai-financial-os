@@ -23,6 +23,9 @@ out/
 # Docker
 *.pid
 
+# Celery
+celerybeat-schedule
+
 # OS
 .DS_Store
 

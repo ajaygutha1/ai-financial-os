@@ -9,29 +9,49 @@ os.environ["ENVIRONMENT"] = "test"
 
 import uuid
 from collections.abc import Generator
+from pathlib import Path
 
 import pytest
+from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.models  # noqa: F401  (registers all models on Base.metadata)
+from alembic import command
 from app.core.config import get_settings
 from app.core.db import Base, get_db
 from app.main import app as fastapi_app
 from app.models.account import Account, AccountType
 from app.models.user import User
 
+API_DIR = Path(__file__).parent.parent
+
+
+def _alembic_config() -> Config:
+    # env.py resolves the DB URL itself via get_settings().database_url
+    # (already pointed at finos_test by the env vars set above), so nothing
+    # needs to be set here beyond locating alembic.ini.
+    return Config(str(API_DIR / "alembic.ini"))
+
 
 @pytest.fixture(scope="session")
 def engine() -> Generator[Engine, None, None]:
+    # Real Alembic migrations, not Base.metadata.create_all(): migration 0002
+    # adds a raw SQL trigger/function (audit_log immutability) and a
+    # procedural hash-chain backfill that create_all can't produce, and this
+    # doubles as a standing check that `alembic upgrade head` actually works
+    # every time the test suite runs.
     settings = get_settings()
     eng = create_engine(settings.database_url)
-    eng.connect().execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto")).close()
-    Base.metadata.create_all(eng)
+
+    alembic_cfg = _alembic_config()
+    command.upgrade(alembic_cfg, "head")
+
     yield eng
-    Base.metadata.drop_all(eng)
+
+    command.downgrade(alembic_cfg, "base")
     eng.dispose()
 
 
@@ -48,8 +68,17 @@ def db_session(engine: Engine) -> Generator[Session, None, None]:
 
     session.close()
     with engine.begin() as connection:
+        # audit_log's immutability trigger (Milestone 2) rejects UPDATE/DELETE
+        # unconditionally -- including the implicit UPDATE Postgres issues for
+        # audit_log.user_id's ON DELETE SET NULL action when a referenced
+        # `users` row is deleted below. Disabling triggers for this cleanup
+        # transaction is a deliberate, explicit escape hatch available only to
+        # the table owner (superuser-equivalent maintenance access) -- normal
+        # application code never does this, so the production guarantee holds.
+        connection.execute(text("ALTER TABLE audit_log DISABLE TRIGGER ALL"))
         for table in reversed(Base.metadata.sorted_tables):
             connection.execute(table.delete())
+        connection.execute(text("ALTER TABLE audit_log ENABLE TRIGGER ALL"))
 
 
 @pytest.fixture

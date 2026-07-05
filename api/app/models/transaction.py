@@ -13,6 +13,8 @@ from app.models.base import TimestampMixin, UUIDPKMixin
 
 if TYPE_CHECKING:
     from app.models.account import Account
+    from app.models.category import Category
+    from app.models.merchant import Merchant
 
 
 class TransactionType(StrEnum):
@@ -64,7 +66,21 @@ class Transaction(UUIDPKMixin, TimestampMixin, Base):
     merchant_raw: Mapped[str | None] = mapped_column(String(500), nullable=True)
     merchant_normalized: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Plain strings, kept alongside the FK columns below through Milestone 2
+    # (expand/contract migration pattern -- see migration 0002's docstring).
     category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("category.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    merchant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("merchant.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     transaction_type: Mapped[str] = mapped_column(
         String(32), nullable=False, default=TransactionType.PURCHASE
     )
@@ -80,3 +96,5 @@ class Transaction(UUIDPKMixin, TimestampMixin, Base):
     raw_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     account: Mapped["Account"] = relationship(back_populates="transactions")
+    category_ref: Mapped["Category | None"] = relationship()
+    merchant: Mapped["Merchant | None"] = relationship()

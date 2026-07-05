@@ -19,6 +19,8 @@ dependencies = [
     "redis>=5.1",
     "python-multipart>=0.0.12",
     "itsdangerous>=2.2",
+    "celery[redis]>=5.4",
+    "ofxparse>=0.21",
 ]
 
 [dependency-groups]

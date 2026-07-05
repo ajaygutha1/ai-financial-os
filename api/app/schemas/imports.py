@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 
 
-class CsvImportResult(BaseModel):
+class ImportResult(BaseModel):
     imported_count: int
     duplicate_count: int
     error_count: int

@@ -32,3 +32,9 @@ class AuditLog(UUIDPKMixin, Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # Hash chain (Milestone 2, Enhancement 2): row_hash depends on prev_hash,
+    # so tampering with any historical row breaks the chain. Computed by
+    # AuditLogRepository.record(), never by a DB default. The genesis row uses
+    # GENESIS_HASH as its prev_hash so verification needs no special case.
+    prev_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    row_hash: Mapped[str] = mapped_column(String(64), nullable=False)

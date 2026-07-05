@@ -1,8 +1,19 @@
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from pydantic import BaseModel
+
+
+class TransactionProvenancePublic(BaseModel):
+    id: uuid.UUID
+    step: str
+    detail: dict[str, Any] | None
+    sync_job_id: uuid.UUID | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class TransactionPublic(BaseModel):

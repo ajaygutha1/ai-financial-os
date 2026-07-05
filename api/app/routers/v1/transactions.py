@@ -6,8 +6,13 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.security import get_current_user
+from app.models.transaction_provenance import TransactionProvenance
 from app.models.user import User
-from app.schemas.transaction import TransactionListResponse, TransactionPublic
+from app.schemas.transaction import (
+    TransactionListResponse,
+    TransactionProvenancePublic,
+    TransactionPublic,
+)
 from app.services.transaction_service import TransactionService
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
@@ -38,3 +43,13 @@ def list_transactions(
         page=page,
         page_size=page_size,
     )
+
+
+@router.get("/{transaction_id}/provenance", response_model=list[TransactionProvenancePublic])
+def get_transaction_provenance(
+    transaction_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[TransactionProvenance]:
+    service = TransactionService(db)
+    return service.get_provenance(user_id=current_user.id, transaction_id=transaction_id)

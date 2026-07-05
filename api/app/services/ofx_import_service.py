@@ -4,7 +4,8 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFoundError
 from app.events.event_bus import EventBus
-from app.ingestion.normalization.pipeline import run_csv_import_pipeline
+from app.ingestion.connectors.ofx import OfxConnector
+from app.ingestion.normalization.pipeline import run_connector_sync_pipeline
 from app.models.transaction import ImportSource
 from app.repositories.account_repository import AccountRepository
 from app.repositories.audit_log_repository import AuditLogRepository
@@ -16,7 +17,7 @@ from app.schemas.imports import ImportResult
 from app.services.ingestion_common import make_pipeline_dependencies, persist_pipeline_result
 
 
-class CsvImportService:
+class OfxImportService:
     def __init__(self, db: Session) -> None:
         self.db = db
         self.accounts = AccountRepository(db)
@@ -27,24 +28,23 @@ class CsvImportService:
         self.categories = CategoryRepository(db)
         self.event_bus = EventBus(db)
 
-    def import_csv(
-        self,
-        *,
-        user_id: uuid.UUID,
-        account_id: uuid.UUID,
-        content: bytes,
-        debit_positive: bool,
+    def import_ofx(
+        self, *, user_id: uuid.UUID, account_id: uuid.UUID, content: bytes
     ) -> ImportResult:
         account = self.accounts.get_by_id(account_id)
         if account is None or account.user_id != user_id:
             raise NotFoundError("Account not found.")
 
-        result = run_csv_import_pipeline(
-            content=content,
+        connector = OfxConnector(content)
+        raw_transactions, _ = connector.fetch_transactions(cursor=None)
+
+        result = run_connector_sync_pipeline(
+            raw_transactions=raw_transactions,
             user_id=user_id,
             account_id=account_id,
             account_currency=account.currency,
-            debit_positive=debit_positive,
+            import_source=ImportSource.OFX,
+            import_batch_id=uuid.uuid4(),
             deps=make_pipeline_dependencies(
                 transactions=self.transactions,
                 merchants=self.merchants,
@@ -62,8 +62,8 @@ class CsvImportService:
             result=result,
             user_id=user_id,
             account_id=account_id,
-            event_type="csv_import.completed",
-            import_source=ImportSource.CSV.value,
+            event_type="ofx_import.completed",
+            import_source=ImportSource.OFX.value,
         )
         self.db.commit()
         self.event_bus.dispatch(event)

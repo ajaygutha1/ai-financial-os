@@ -53,6 +53,9 @@ class Account(UUIDPKMixin, TimestampMixin, Base):
     source: Mapped[str] = mapped_column(String(32), nullable=False, default=AccountSource.MANUAL)
     external_account_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Denormalized resume-point for the Celery sync task (same precedent as
+    # current_balance summarizing transactions) -- Milestone 2.
+    last_sync_cursor: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="accounts")
     transactions: Mapped[list["Transaction"]] = relationship(

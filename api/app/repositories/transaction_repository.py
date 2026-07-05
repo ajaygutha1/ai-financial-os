@@ -12,6 +12,9 @@ class TransactionRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
 
+    def get_by_id(self, transaction_id: uuid.UUID) -> Transaction | None:
+        return self.db.get(Transaction, transaction_id)
+
     def list_for_user(
         self,
         user_id: uuid.UUID,
@@ -66,6 +69,66 @@ class TransactionRepository:
         if merchant_normalized:
             stmt = stmt.where(Transaction.merchant_normalized == merchant_normalized)
         return list(self.db.scalars(stmt))
+
+    def find_transfer_match(
+        self,
+        *,
+        user_id: uuid.UUID,
+        exclude_account_id: uuid.UUID,
+        posted_at: date,
+        amount: Decimal,
+        window_days: int = 2,
+    ) -> Transaction | None:
+        """A transfer between the user's own accounts shows up as two rows:
+        an outflow in one account and an equal-and-opposite inflow in
+        another, close together in time. Only matches transactions already
+        persisted in a *different* account -- a transfer inherently spans
+        two accounts, and a single CSV/OFX import only ever touches one.
+        """
+        stmt = (
+            select(Transaction)
+            .where(
+                Transaction.user_id == user_id,
+                Transaction.account_id != exclude_account_id,
+                Transaction.amount == -amount,
+                Transaction.posted_at.between(
+                    posted_at - timedelta(days=window_days),
+                    posted_at + timedelta(days=window_days),
+                ),
+            )
+            .order_by(Transaction.posted_at)
+        )
+        return self.db.scalar(stmt)
+
+    def find_refund_match(
+        self,
+        *,
+        account_id: uuid.UUID,
+        merchant_normalized: str | None,
+        posted_at: date,
+        amount: Decimal,
+        window_days: int = 90,
+    ) -> Transaction | None:
+        """A refund is an equal-and-opposite inflow from the same merchant,
+        in the same account, following an earlier purchase -- given a much
+        longer window than duplicate/transfer detection since refunds can
+        take weeks to process.
+        """
+        if merchant_normalized is None:
+            return None
+
+        stmt = (
+            select(Transaction)
+            .where(
+                Transaction.account_id == account_id,
+                Transaction.merchant_normalized == merchant_normalized,
+                Transaction.amount == -amount,
+                Transaction.posted_at <= posted_at,
+                Transaction.posted_at >= posted_at - timedelta(days=window_days),
+            )
+            .order_by(Transaction.posted_at.desc())
+        )
+        return self.db.scalar(stmt)
 
     def bulk_create(self, transactions: list[Transaction]) -> None:
         self.db.add_all(transactions)

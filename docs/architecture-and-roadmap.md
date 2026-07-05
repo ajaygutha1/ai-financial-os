@@ -242,8 +242,123 @@ deliberately deferred to M10.
 4. Re-upload the same CSV and confirm duplicate detection flags rows instead of double-inserting.
 5. Push a test branch and confirm both GitHub Actions workflows go green.
 
+---
+
+## Milestone 2 — Detailed Implementation Plan (built and verified)
+
+Goal: ingestion breadth (real OFX/QFX parsing + stubbed Plaid/Coinbase/Robinhood
+connectors behind one shared protocol) and the real normalization engine M1
+deliberately deferred (currency conversion, transfer detection, refund matching,
+ACH/wire classification), plus five additive architecture enhancements approved
+during M2 planning that harden the ingestion path without touching M1's existing
+schema or module boundaries.
+
+### Connector protocol
+
+`ingestion/connectors/base.py` defines a `Connector` protocol every source
+implements identically:
+```python
+class Connector(Protocol):
+    def fetch_accounts(self) -> list[RawAccount]: ...
+    def fetch_transactions(self, cursor: str | None) -> tuple[list[RawTransaction], str | None]: ...
+```
+The `cursor` parameter mirrors real Plaid's `/transactions/sync` API shape
+deliberately — so M9's swap from stub to real Plaid is a new file implementing
+this same protocol, not a redesign.
+
+- `ingestion/connectors/ofx.py` — real parsing via `ofxparse`/`ofxtools`, feeding
+  the same normalization pipeline CSV already uses.
+- `ingestion/connectors/{plaid,coinbase,robinhood}_stub.py` — deterministic fake
+  data shaped like each provider's real API/export format.
+
+### Category & merchant promotion
+
+Additive migration `0002`: `category` and `merchant` tables, backfilled from
+`transactions.category`/`merchant_normalized`; add `category_id`/`merchant_id` FK
+columns, then drop the old string columns — exactly the non-disruptive migration
+path M1's schema was designed to allow.
+
+### Normalization engine additions
+
+`ingestion/normalization/{currency_converter,transfer_detector}.py` plus
+extensions to the existing merchant/dedup modules for refund matching and
+ACH/wire classification — same rule-based style as M1's merchant normalizer, no
+new abstraction layer.
+
+### Celery + Redis become active infrastructure
+
+`jobs/celery_app.py` + `jobs/tasks/sync_accounts.py`; `docker-compose.yml` gains
+`worker` and `beat` services. Recurring/automated sync is the reason M2, not M1,
+is when Celery actually starts doing work.
+
+### New/extended tables (migration `0002`)
+
+| Table | Columns added |
+|---|---|
+| `category` | `id`, `name`, `parent_id` (self-FK, hierarchical) |
+| `merchant` | `id`, `canonical_name`, `category_id` (FK) |
+| `connector_credential` | `id`, `user_id` FK, `provider`, encrypted-placeholder token fields (real encryption in M8) |
+| `sync_job` | `id`, `account_id` FK, `status`, `started_at`, `finished_at`, `cursor_before`, `cursor_after`, `idempotency_key` (unique), `reconciliation_status`, `discrepancy_amount` |
+| `domain_events` | `id`, `event_type`, `payload` jsonb, `aggregate_type`, `aggregate_id`, `occurred_at` |
+| `transaction_provenance` | `id`, `transaction_id` FK, `sync_job_id` FK, `step`, `detail` jsonb, `created_at` |
+
+### Enhancement 1 — Domain Events + Event Bus
+
+Additive event emission alongside existing service writes — not full event
+sourcing, so nothing about how state is read or written today changes.
+`app/events/domain_event.py` (Pydantic event models: `TransactionImported`,
+`SyncCompleted`, `DuplicateDetected`, `TransferDetected`), `app/events/event_bus.py`
+(`publish()`, in-process + optional Redis pub/sub for live fan-out), called from
+`csv_import_service.py` and the new `sync_service.py`. Unblocks: M3 (invalidate
+analytics cache on new-transaction events instead of polling), M4 (agents react to
+events), M7 (SSE live dashboard), M9 (webhooks map directly onto this bus).
+
+### Enhancement 2 — Immutable, Tamper-Evident Audit Log
+
+Hardens M1's `audit_log` table: a migration adds `REVOKE UPDATE, DELETE` for the
+app role (or a rejecting trigger), plus optional `prev_hash`/`row_hash` columns so
+each row's hash depends on the previous row's — tampering with history breaks the
+chain. Sets the pattern M4's `ai_audit_log` inherits from day one.
+
+### Enhancement 3 — Data Lineage & Transaction Provenance
+
+Formalizes M1's loose `raw_payload`/`import_source`/`import_batch_id` tracking:
+the normalization pipeline now emits a step-by-step trace (what changed, at which
+step) into `transaction_provenance`, linked to the `sync_job` that produced it.
+Optional `GET /transactions/{id}/provenance` endpoint. This is the same data
+shape M4's AI agents will need to cite "which transactions were analyzed" —
+built here for free instead of retrofitted later.
+
+### Enhancement 4 — Idempotent, Cursor-Based Incremental Sync
+
+Every `sync_job` carries `cursor_before`/`cursor_after` and a unique
+`idempotency_key`, so a crashed or retried sync can't double-insert. This is the
+same cursor-based model real Plaid's `/transactions/sync` API uses, so M9's real
+integration is a drop-in against an already-correct sync model.
+
+### Enhancement 5 — Balance Reconciliation Engine
+
+`app/analytics/reconciliation.py` (placed next to where M3's analytics engine
+will live — reconciliation status is itself a small analytic) verifies
+`starting_balance + sum(transactions since) == reported_current_balance` after
+every sync, storing `reconciliation_status`/`discrepancy_amount` on `sync_job`.
+Surfaces to M7's dashboard as a data-health indicator; M6's Fraud Detection agent
+can later consume unresolved discrepancies as a signal.
+
+None of the five enhancements require new infrastructure beyond Postgres + Redis +
+Celery already in `docker-compose.yml` — all extend the `sync_job` table and
+normalization pipeline M2 already plans, not parallel subsystems.
+
 ## After approval
 
-Scaffold only Milestone 1 per this plan. Stop and report before starting Milestone 2 — its detailed
-design will be revisited once M1 is verified, since real experience building M1 may change M2's
-specifics (e.g., exact OFX library, exact stub-connector shape).
+M1 and M2 are both built and verified end-to-end (84 tests passing, mypy --strict
+and ruff clean, full Docker Compose stack including Celery worker/beat manually
+exercised against live stub connectors). A few specifics were refined during
+hands-on M2 implementation versus the original spec: `ofxparse` was used over
+`ofxtools` for OFX parsing; the shared `imports.py` schema replaced the CSV-only
+`csv_import.py` once OFX needed the same response shape; the audit-log
+immutability trigger also covers `TRUNCATE` (a separate Postgres trigger event
+that a bare `DELETE` trigger doesn't catch); and four DB-backed pipeline lookups
+(dedup, merchant resolution, transfer/refund matching) were bundled into a single
+`PipelineDependencies` object rather than four growing callback parameters.
+Milestone 3 (financial analytics engine) is next.
