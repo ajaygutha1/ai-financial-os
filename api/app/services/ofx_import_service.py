@@ -36,7 +36,9 @@ class OfxImportService:
             raise NotFoundError("Account not found.")
 
         connector = OfxConnector(content)
-        raw_transactions, _ = connector.fetch_transactions(cursor=None)
+        raw_transactions, _ = connector.fetch_transactions(
+            cursor=None, external_account_id=account.external_account_id
+        )
 
         result = run_connector_sync_pipeline(
             raw_transactions=raw_transactions,

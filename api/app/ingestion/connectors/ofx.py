@@ -64,9 +64,33 @@ class OfxConnector:
             )
         return accounts
 
-    def fetch_transactions(self, cursor: str | None) -> tuple[list[RawTransaction], str | None]:
+    def fetch_transactions(
+        self, cursor: str | None, *, external_account_id: str | None = None
+    ) -> tuple[list[RawTransaction], str | None]:
+        """A single OFX/QFX file can contain statements for more than one
+        account (e.g. a bank's "export all accounts" option bundles checking
+        and savings in one <OFX> document). Since the upload endpoint targets
+        exactly one of the app's accounts, `external_account_id` must be given
+        whenever the file has more than one statement, so transactions from
+        the wrong statement can't be silently attributed to the target
+        account. With a single statement in the file, it's used regardless
+        (there's nothing to disambiguate).
+        """
+        accounts = list(self._ofx.accounts)
+        if len(accounts) > 1:
+            matched = [a for a in accounts if a.account_id == external_account_id]
+            if not matched:
+                raise ValidationError(
+                    "This OFX/QFX file contains statements for multiple accounts "
+                    f"({', '.join(a.account_id for a in accounts)}), and none match "
+                    f"the target account ({external_account_id!r}). Link the account "
+                    "to the correct external account id, or upload a single-account "
+                    "OFX/QFX file, to avoid importing another account's transactions."
+                )
+            accounts = matched
+
         raw_transactions: list[RawTransaction] = []
-        for account in self._ofx.accounts:
+        for account in accounts:
             statement = account.statement
             if statement is None:
                 continue
