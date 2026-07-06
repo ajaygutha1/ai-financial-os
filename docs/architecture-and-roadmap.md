@@ -273,10 +273,14 @@ this same protocol, not a redesign.
 
 ### Category & merchant promotion
 
-Additive migration `0002`: `category` and `merchant` tables, backfilled from
-`transactions.category`/`merchant_normalized`; add `category_id`/`merchant_id` FK
-columns, then drop the old string columns — exactly the non-disruptive migration
-path M1's schema was designed to allow.
+Additive migration `0002`: new `category` and `merchant` tables, plus nullable
+`category_id`/`merchant_id` FK columns on `transactions`. The normalization
+pipeline now writes only the FK columns going forward; the old
+`category`/`merchant_normalized` string columns are left in place, unpopulated,
+for this milestone — no backfill and no drop yet. The contract phase (backfill
+existing rows, then drop the string columns) is deferred to a later migration,
+following the non-disruptive expand/contract path M1's schema was designed to
+allow.
 
 ### Normalization engine additions
 
@@ -308,8 +312,10 @@ Additive event emission alongside existing service writes — not full event
 sourcing, so nothing about how state is read or written today changes.
 `app/events/domain_event.py` (Pydantic event models: `TransactionImported`,
 `SyncCompleted`, `DuplicateDetected`, `TransferDetected`), `app/events/event_bus.py`
-(`publish()`, in-process + optional Redis pub/sub for live fan-out), called from
-`csv_import_service.py` and the new `sync_service.py`. Unblocks: M3 (invalidate
+(`record()` durably persists the event in the same DB transaction as the write
+it accompanies; `dispatch()` does best-effort in-process + optional Redis
+pub/sub fan-out after commit), called from `csv_import_service.py`,
+`ofx_import_service.py`, and the new `sync_service.py`. Unblocks: M3 (invalidate
 analytics cache on new-transaction events instead of polling), M4 (agents react to
 events), M7 (SSE live dashboard), M9 (webhooks map directly onto this bus).
 
