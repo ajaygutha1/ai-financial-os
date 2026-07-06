@@ -3,7 +3,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.transaction import Transaction
 
@@ -133,3 +133,27 @@ class TransactionRepository:
     def bulk_create(self, transactions: list[Transaction]) -> None:
         self.db.add_all(transactions)
         self.db.flush()
+
+    def list_for_analytics(
+        self,
+        user_id: uuid.UUID,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> list[Transaction]:
+        """Unpaginated fetch for analytics aggregation (app/analytics/), with
+        `account` and `category_ref` eager-loaded so callers can branch on
+        account type / category without N+1 queries. Callers should always
+        pass a bounded date range in practice -- this exists for a personal
+        finance app's per-user transaction volumes, not an unbounded ledger
+        scan."""
+        stmt = (
+            select(Transaction)
+            .where(Transaction.user_id == user_id)
+            .options(joinedload(Transaction.account), joinedload(Transaction.category_ref))
+        )
+        if date_from is not None:
+            stmt = stmt.where(Transaction.posted_at >= date_from)
+        if date_to is not None:
+            stmt = stmt.where(Transaction.posted_at <= date_to)
+        return list(self.db.scalars(stmt).unique())

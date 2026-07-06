@@ -1,15 +1,20 @@
 "use client";
 
-import { Banknote, Landmark, LineChart, PiggyBank, Sparkles } from "lucide-react";
+import { Banknote, Landmark, PiggyBank, Sparkles } from "lucide-react";
 
 import { CreateAccountDialog } from "@/components/accounts/create-account-dialog";
+import { CashFlowChart } from "@/components/dashboard/cash-flow-chart";
+import { DebtPayoffCard } from "@/components/dashboard/debt-payoff-card";
+import { EmergencyFundTile } from "@/components/dashboard/emergency-fund-tile";
+import { ExpenseTrendsCard } from "@/components/dashboard/expense-trends-card";
+import { FinancialRatiosTile } from "@/components/dashboard/financial-ratios-tile";
 import { NetWorthTile } from "@/components/dashboard/net-worth-tile";
+import { SubscriptionsCard } from "@/components/dashboard/subscriptions-card";
 import { ImportCsvDialog } from "@/components/transactions/import-csv-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/hooks/use-auth";
 
 const ROADMAP = [
-  { title: "Cash flow", icon: LineChart },
   { title: "Investments", icon: Landmark },
   { title: "Budget tracking", icon: PiggyBank },
   { title: "AI insights", icon: Sparkles },
@@ -59,6 +64,21 @@ export default function DashboardPage() {
         </Card>
       </div>
 
+      <div className="grid gap-4 lg:grid-cols-3">
+        <CashFlowChart className="lg:col-span-2" />
+        <EmergencyFundTile />
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <FinancialRatiosTile />
+        <ExpenseTrendsCard />
+        <SubscriptionsCard />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <DebtPayoffCard className="lg:col-span-2" />
+      </div>
+
       <section>
         <div className="mb-3 flex items-center gap-2">
           <Banknote className="size-4 text-muted-foreground" />
@@ -66,7 +86,7 @@ export default function DashboardPage() {
             Coming next
           </h2>
         </div>
-        <div className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-3">
           {ROADMAP.map(({ title, icon: Icon }) => (
             <div
               key={title}

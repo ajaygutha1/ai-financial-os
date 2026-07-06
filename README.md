@@ -6,9 +6,14 @@ analytics engine over it, and layers explainable, agentic AI on top with
 full audit trails.
 
 This repo is being built milestone by milestone. See `docs/` for the
-architecture and roadmap. **Milestone 1 (this state)** covers: auth (JWT +
-Google/GitHub OAuth), the core data model, CSV import with a normalization/
-dedup pipeline, and a dashboard shell with a live net worth tile.
+architecture and roadmap. **Through Milestone 3** it covers: auth (JWT +
+Google/GitHub OAuth), the core data model, multi-source ingestion (CSV, OFX,
+and stubbed Plaid/Coinbase/Robinhood connectors) with a real normalization/
+dedup/transfer/refund pipeline, an immutable audit log, and a modular
+analytics engine (net worth, cash flow, burn rate, savings rate, expense
+trends, subscription detection, emergency fund health, debt payoff, and
+financial ratios) surfaced on a live dashboard. See `docs/demo-data/` for
+realistic sample data to explore it with.
 
 ## Stack
 

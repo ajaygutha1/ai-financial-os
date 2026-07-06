@@ -349,16 +349,114 @@ None of the five enhancements require new infrastructure beyond Postgres + Redis
 Celery already in `docker-compose.yml` — all extend the `sync_job` table and
 normalization pipeline M2 already plans, not parallel subsystems.
 
+## Milestone 3 — Detailed Implementation Plan (built and verified)
+
+Goal: the modular financial analytics engine M1/M2 deliberately deferred --
+cash flow, net worth, burn rate, savings rate, debt payoff, expense trends,
+subscription detection, emergency fund health, and financial ratios -- computed
+from the real transaction/account data M1/M2 already ingest, with no new
+tables. Unblocks M4 (agents need real numbers to cite).
+
+### The sign-convention design decision
+
+The one subtlety the whole milestone hinges on: `transaction.amount` is signed
+relative to *its own account's* balance (`balance_before + amount ==
+balance_after`, per M2's reconciliation engine), not the user's total wealth.
+A positive amount is income on a checking/savings account but a new charge
+(real spending) on a credit card; a negative amount is an expense on
+checking/savings but a payment/credit on a credit card. `transaction_type`
+turned out *not* to be a usable classifier for this -- the M1/M2 pipelines
+default every non-transfer row to `PURCHASE` regardless of sign. So
+`app/analytics/common.py` classifies income/expense per transaction by
+`account_type` instead, documented in one place and reused by every module
+that needs it (`cash_flow`, `burn_rate`, `savings_rate`, `expense_trends`,
+`subscriptions`, `emergency_fund`, `debt_payoff`, `ratios`). Loans/mortgages
+are excluded from the expense side entirely -- there's no "purchase" concept
+there, only balance-reducing payments already reflected in the paying
+account's own outflow.
+
+### Structure
+
+```
+api/app/analytics/
+├── common.py           # MonthlyFlow, month_start/add_months, classify_flow, monthly_income_and_expenses
+├── engine.py            # AnalyticsEngine registry -- routers call modules directly for static typing;
+│                         # the registry exists so M4's agents get one generic run(metric, user_id, **params)
+├── modules/
+│   ├── net_worth.py      # migrated from the M1 NetWorthService (deleted)
+│   ├── cash_flow.py, burn_rate.py, savings_rate.py
+│   ├── expense_trends.py  # category-level rising/falling/steady vs. trailing average
+│   ├── subscriptions.py   # rule-based: >=2 charges, consistent cadence + amount within 10%
+│   ├── emergency_fund.py  # liquid assets / trailing avg. expenses, tiered health label
+│   ├── debt_payoff.py     # naive projection from trailing net paydown rate
+│   └── ratios.py          # composes emergency_fund/net_worth rather than re-deriving them
+└── reconciliation.py (M2, unchanged)
+```
+
+Every response schema (`app/schemas/analytics.py`) carries a `methodology`
+string alongside the numbers -- cheap to add now, and it's exactly the
+"why was this computed this way" text M4's explainability requirement needs
+agents to cite. `TransactionRepository.list_for_analytics()` adds one
+unpaginated, date-bounded fetch with `account`/`category_ref` eager-loaded,
+reused by every module instead of each hand-rolling a query.
+
+### Endpoints
+
+`GET /api/v1/analytics/{net-worth,cash-flow,burn-rate,savings-rate,
+expense-trends,subscriptions,emergency-fund,debt-payoff,ratios}`, each
+accepting an optional `months` window. 104 backend tests (up from 84),
+covering empty-state and realistic scenarios per module -- the trickiest
+category was date construction: tests originally placed "this month" fixtures
+at fixed day offsets, which silently broke depending on what day of the month
+the suite happened to run (a transaction dated after "today" is correctly
+excluded by the date-bounded query, so a fixture at day 6 fails if the suite
+runs on day 3). Fixed by using `date.today()` directly for single-day
+fixtures and fully-elapsed prior months for anything needing multiple
+distinct dates.
+
+### Frontend
+
+Six new dashboard widgets (`CashFlowChart`, `FinancialRatiosTile`,
+`EmergencyFundTile`, `ExpenseTrendsCard`, `SubscriptionsCard`,
+`DebtPayoffCard`) share one `AnalyticsCard` wrapper for the
+loading/error/content pattern `NetWorthTile` established in M1. Savings rate
+and burn rate are folded into one `FinancialRatiosTile` rather than three
+separate cards, since `ratios` already returns `savings_rate` and
+`liquidity_ratio_months` directly -- one less round trip and one less card.
+
+### Demo data
+
+`docs/demo-data/generate.py` produces two date-relative CSVs (checking +
+credit card, regenerated fresh before any demo) with merchant names chosen to
+match `merchant_normalizer.py`'s known-merchant table (Whole Foods, Netflix,
+Spotify, Uber, Starbucks), so expense trends and subscriptions have real
+categories/cadences to show instead of "Uncategorized." See
+`docs/demo-data/README.md` for the walkthrough.
+
+### Bugs found during hands-on verification (fixed, not just noted)
+
+Browser verification (Playwright driving the real app, not just curling the
+API) caught two real issues the API-level checks alone missed: the cash-flow
+chart's Y-axis labels were clipped to an unreadable "00.00" (a negative
+`margin.left` combined with a too-narrow axis `width` pushed long
+`formatCurrency` labels partly off the card -- fixed with a compact `$6k`-style
+axis formatter and a non-negative margin); and the "Net saving" stat showed a
+confusing negative sign (`average_monthly_burn` is negative when saving,
+which read fine next to "Burn rate" but not next to "Net saving" -- fixed by
+displaying the absolute value, since the label already encodes direction).
+
 ## After approval
 
-M1 and M2 are both built and verified end-to-end (84 tests passing, mypy --strict
-and ruff clean, full Docker Compose stack including Celery worker/beat manually
-exercised against live stub connectors). A few specifics were refined during
-hands-on M2 implementation versus the original spec: `ofxparse` was used over
-`ofxtools` for OFX parsing; the shared `imports.py` schema replaced the CSV-only
-`csv_import.py` once OFX needed the same response shape; the audit-log
-immutability trigger also covers `TRUNCATE` (a separate Postgres trigger event
-that a bare `DELETE` trigger doesn't catch); and four DB-backed pipeline lookups
-(dedup, merchant resolution, transfer/refund matching) were bundled into a single
+M1, M2, and M3 are all built and verified end-to-end (104 tests passing,
+mypy --strict and ruff clean, full Docker Compose stack, and the dashboard
+manually driven end-to-end in a real browser against realistic demo data). A
+few specifics were refined during hands-on M2 implementation versus the
+original spec: `ofxparse` was used over `ofxtools` for OFX parsing; the shared
+`imports.py` schema replaced the CSV-only `csv_import.py` once OFX needed the
+same response shape; the audit-log immutability trigger also covers
+`TRUNCATE` (a separate Postgres trigger event that a bare `DELETE` trigger
+doesn't catch); and four DB-backed pipeline lookups (dedup, merchant
+resolution, transfer/refund matching) were bundled into a single
 `PipelineDependencies` object rather than four growing callback parameters.
-Milestone 3 (financial analytics engine) is next.
+Milestone 4 (the `AIProvider` adapter, audit plumbing, and the first agent) is
+next.
