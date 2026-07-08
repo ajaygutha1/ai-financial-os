@@ -6,6 +6,10 @@ os.environ["DATABASE_URL"] = (
 os.environ["REDIS_URL"] = "redis://localhost:6379/1"
 os.environ["JWT_SECRET"] = "test-secret-not-for-production-use-only-32bytes-min"
 os.environ["ENVIRONMENT"] = "test"
+# Dummy, non-functional -- tests override the AIProvider dependency with a
+# FakeAIProvider that never calls the real Anthropic SDK. This only needs to
+# satisfy the router's "is AI configured at all" presence check.
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-fake-key-not-real"
 
 import uuid
 from collections.abc import Generator
@@ -68,17 +72,20 @@ def db_session(engine: Engine) -> Generator[Session, None, None]:
 
     session.close()
     with engine.begin() as connection:
-        # audit_log's immutability trigger (Milestone 2) rejects UPDATE/DELETE
-        # unconditionally -- including the implicit UPDATE Postgres issues for
-        # audit_log.user_id's ON DELETE SET NULL action when a referenced
-        # `users` row is deleted below. Disabling triggers for this cleanup
-        # transaction is a deliberate, explicit escape hatch available only to
-        # the table owner (superuser-equivalent maintenance access) -- normal
-        # application code never does this, so the production guarantee holds.
+        # audit_log's and ai_audit_log's immutability triggers (Milestone 2,
+        # Milestone 4) reject UPDATE/DELETE unconditionally -- including the
+        # implicit UPDATE/DELETE Postgres issues for their FK ON DELETE
+        # actions when a referenced row is deleted below. Disabling triggers
+        # for this cleanup transaction is a deliberate, explicit escape hatch
+        # available only to the table owner (superuser-equivalent maintenance
+        # access) -- normal application code never does this, so the
+        # production guarantee holds.
         connection.execute(text("ALTER TABLE audit_log DISABLE TRIGGER ALL"))
+        connection.execute(text("ALTER TABLE ai_audit_log DISABLE TRIGGER ALL"))
         for table in reversed(Base.metadata.sorted_tables):
             connection.execute(table.delete())
         connection.execute(text("ALTER TABLE audit_log ENABLE TRIGGER ALL"))
+        connection.execute(text("ALTER TABLE ai_audit_log ENABLE TRIGGER ALL"))
 
 
 @pytest.fixture

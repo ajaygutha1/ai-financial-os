@@ -445,9 +445,125 @@ confusing negative sign (`average_monthly_burn` is negative when saving,
 which read fine next to "Burn rate" but not next to "Net saving" -- fixed by
 displaying the absolute value, since the label already encodes direction).
 
+## Milestone 4 — Detailed Implementation Plan (built and verified)
+
+Goal: the `AIProvider` adapter, audit plumbing, and the first real agent
+(Financial Advisor) end-to-end -- calling the analytics engine as tools and
+producing a structured, cited, confidence-scored recommendation. Unblocks M5
+(RAG plugs into this same pattern) and M6 (remaining agents reuse it as-is).
+
+### Model choice and sync-first design
+
+Default model is `claude-opus-4-8` (configurable via `AI_MODEL`), not
+downgraded for cost -- financial-advice quality is worth it, and it's the
+user's call to change, not a default this system picks. `AIProvider` is a
+**sync** interface, matching the rest of this codebase's sync
+SQLAlchemy/FastAPI style, rather than introducing async for one subsystem (a
+deliberate departure from this doc's original M1-era sketch, which predates
+the actual sync-Session pattern M1 shipped with).
+
+### Structured output: a terminal tool, not `output_config.format`
+
+The originally-sketched design paired `tools` with `output_config.format` on
+every turn so a final text answer would be schema-constrained. That combo is
+under-documented for multi-turn tool loops, so the safer, well-established
+pattern was used instead: `submit_recommendations` is declared as an
+ordinary strict-schema tool (`ToolDefinition`, `strict: true`,
+`additionalProperties: false`) alongside the analytics tools, with
+`tool_choice` left at its default `auto`. The agent loop treats a tool call
+to `submit_recommendations` as the terminal signal -- no reliance on
+`stop_reason == "end_turn"` or any interaction between two features at once.
+
+### Structure
+
+```
+api/app/ai/
+├── provider/
+│   ├── base.py             # AIProvider ABC -- generate() is concrete: persists an
+│   │                         # AIAuditLog row before returning, so audit logging is
+│   │                         # structurally impossible for an agent to bypass
+│   ├── anthropic_provider.py  # the only module that may `import anthropic`
+│   ├── fake_provider.py     # test double: scripted RawModelResults, real persistence
+│   └── dependency.py        # FastAPI DI seam -- routers depend on this, not the class
+├── tools/
+│   └── analytics_tools.py   # one strict-schema tool per M3 metric, wrapping AnalyticsEngine.run()
+└── agents/
+    └── financial_advisor.py # system prompt, tool-calling loop, FinancialAdviceResult
+```
+
+`AIProvider.generate()` is concrete (not abstract) precisely so persistence
+can't be an afterthought each agent has to remember -- only `_call_model()`
+(the actual network/fake call) is provider-specific. Every call also records
+token usage (input/output/cache-read/cache-creation) and latency for cost
+observability, seeding what M10's cost tracking will read.
+
+### Database (migration `0003`)
+
+- **agent_run**: one row per agent invocation (may span several model
+  calls). `status` (running/completed/failed), `user_message`,
+  `error_message`. `user_id` is nullable + `ON DELETE SET NULL` -- the AI
+  decision trail should survive account deletion, same reasoning as
+  `audit_log.user_id`.
+- **ai_audit_log**: one row per underlying model call. Hash-chained and
+  immutable -- the *exact* pattern from M2's `audit_log` (Enhancement 2),
+  applied here because a hash chain without an enforcement trigger only
+  *detects* tampering on demand; it doesn't prevent it. `prev_hash`/`row_hash`
+  are `NOT NULL` from creation (a new table, no M2-style nullable-then-
+  backfill needed). Stores `system_prompt`, `messages`, `tool_calls`,
+  `response` (full content blocks, including thinking-block summaries),
+  `stop_reason`, and token/latency metrics.
+- **ai_recommendation**: the user-facing deliverable -- `title`,
+  `explanation`, `category`, `confidence`, `citations` (which metrics backed
+  it), `status` (active/dismissed/completed). Deliberately separate from
+  `ai_audit_log`: the dashboard queries this table directly for "your AI
+  insights" without parsing raw audit JSON.
+
+### Financial Advisor agent
+
+System prompt requires citing which tool outputs back every recommendation
+and forbids inventing numbers a tool could supply exactly. The loop: send
+the user's message (or a default "general financial health check" prompt) +
+all M3 analytics tools + `submit_recommendations`; execute whatever tools
+Claude calls, feed results back; repeat up to `AI_MAX_TOOL_ITERATIONS` (default
+6) until `submit_recommendations` is called. If the budget is exhausted
+without a submission, the run is marked `failed` (`AgentIncompleteError`) --
+never fabricates a recommendation. A `stop_reason == "refusal"` is audit-
+logged like any other call, then raised as `AIRefusalError` rather than
+silently retried.
+
+### Endpoints
+
+`POST /api/v1/ai/financial-advisor/advice` (optional `message`, defaults to
+a general check-up) and `GET /api/v1/ai/recommendations`. Returns 503 with a
+clear message if `ANTHROPIC_API_KEY` isn't configured, rather than a raw SDK
+auth error.
+
+### Testing without live API calls
+
+`FakeAIProvider` pops pre-scripted `RawModelResult`s but runs every call
+through the *same* concrete `generate()` persistence path as the real
+provider -- tests exercise the actual audit/hash-chain logic, not a mocked-
+away version of it. 9 new tests (113 total): the immutability trigger
+(update/delete/truncate all rejected, mirroring M2's audit_log tests), the
+full agent loop (tool call -> submit -> recommendation + 2-row verified hash
+chain), the iteration-budget-exhausted failure path, the refusal path, and
+the HTTP endpoints with the provider swapped via FastAPI's dependency
+override. One consequence worth noting: `ai_audit_log`'s new immutability
+trigger meant the test suite's per-test cleanup (which bulk-deletes every
+table between tests) needed the same trigger-disable escape hatch
+`conftest.py` already used for `audit_log`.
+
+### Frontend
+
+`AIInsightsCard`: a persistent list of past recommendations (`GET
+/recommendations`, always loaded) plus a "Get advice" button (`POST
+/financial-advisor/advice`, user-triggered -- not auto-fetched, since it costs
+real tokens) that invalidates and refetches the list on success. Fills the
+"AI insights" dashboard placeholder from M1/M3.
+
 ## After approval
 
-M1, M2, and M3 are all built and verified end-to-end (104 tests passing,
+M1 through M4 are all built and verified end-to-end (113 tests passing,
 mypy --strict and ruff clean, full Docker Compose stack, and the dashboard
 manually driven end-to-end in a real browser against realistic demo data). A
 few specifics were refined during hands-on M2 implementation versus the
@@ -458,5 +574,5 @@ same response shape; the audit-log immutability trigger also covers
 doesn't catch); and four DB-backed pipeline lookups (dedup, merchant
 resolution, transfer/refund matching) were bundled into a single
 `PipelineDependencies` object rather than four growing callback parameters.
-Milestone 4 (the `AIProvider` adapter, audit plumbing, and the first agent) is
-next.
+Milestone 5 (the RAG pipeline: pgvector, hybrid retrieval, IRS/SEC/
+Investopedia corpus, citations wired into the Financial Advisor) is next.

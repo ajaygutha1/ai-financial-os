@@ -31,6 +31,11 @@ class ConflictError(AppError):
     default_message = "Resource already exists."
 
 
+class ServiceUnavailableError(AppError):
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_message = "Service temporarily unavailable."
+
+
 async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, AppError)
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})

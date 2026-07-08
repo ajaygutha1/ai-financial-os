@@ -162,3 +162,28 @@ export interface TokenResponse {
   access_token: string;
   token_type: string;
 }
+
+export interface RecommendationItem {
+  title: string;
+  explanation: string;
+  category: string;
+  confidence: number;
+  metrics_used: string[];
+}
+
+export interface FinancialAdviceResponse {
+  reasoning_summary: string;
+  recommendations: RecommendationItem[];
+}
+
+export interface AIRecommendation {
+  id: string;
+  agent_name: string;
+  title: string;
+  explanation: string;
+  category: string | null;
+  confidence: string;
+  citations: Record<string, unknown>;
+  status: string;
+  created_at: string;
+}

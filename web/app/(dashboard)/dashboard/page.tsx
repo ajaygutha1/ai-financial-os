@@ -1,8 +1,9 @@
 "use client";
 
-import { Banknote, Landmark, PiggyBank, Sparkles } from "lucide-react";
+import { Banknote, Landmark, PiggyBank } from "lucide-react";
 
 import { CreateAccountDialog } from "@/components/accounts/create-account-dialog";
+import { AIInsightsCard } from "@/components/dashboard/ai-insights-card";
 import { CashFlowChart } from "@/components/dashboard/cash-flow-chart";
 import { DebtPayoffCard } from "@/components/dashboard/debt-payoff-card";
 import { EmergencyFundTile } from "@/components/dashboard/emergency-fund-tile";
@@ -17,7 +18,6 @@ import { useAuth } from "@/hooks/use-auth";
 const ROADMAP = [
   { title: "Investments", icon: Landmark },
   { title: "Budget tracking", icon: PiggyBank },
-  { title: "AI insights", icon: Sparkles },
 ];
 
 function greeting(): string {
@@ -77,6 +77,7 @@ export default function DashboardPage() {
 
       <div className="grid gap-4 lg:grid-cols-3">
         <DebtPayoffCard className="lg:col-span-2" />
+        <AIInsightsCard />
       </div>
 
       <section>
@@ -86,7 +87,7 @@ export default function DashboardPage() {
             Coming next
           </h2>
         </div>
-        <div className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-3">
+        <div className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2">
           {ROADMAP.map(({ title, icon: Icon }) => (
             <div
               key={title}
