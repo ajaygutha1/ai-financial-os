@@ -23,16 +23,17 @@ from app.analytics.modules import (
 
 
 def _months_schema(default: int) -> dict[str, Any]:
+    # Numeric constraints (minimum/maximum) aren't supported in Anthropic
+    # tool input schemas -- the valid range is stated in the description
+    # instead, and the analytics endpoints themselves still enforce 1-24.
     return {
         "type": "object",
         "properties": {
             "months": {
                 "type": "integer",
-                "minimum": 1,
-                "maximum": 24,
                 "description": (
-                    f"Trailing months to analyze. Use {default} unless the user "
-                    "asks for a different window."
+                    f"Trailing months to analyze, between 1 and 24. Use {default} "
+                    "unless the user asks for a different window."
                 ),
             }
         },

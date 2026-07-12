@@ -553,6 +553,22 @@ trigger meant the test suite's per-test cleanup (which bulk-deletes every
 table between tests) needed the same trigger-disable escape hatch
 `conftest.py` already used for `audit_log`.
 
+### Live verification (real Anthropic API, not the fake provider)
+
+The fake-provider test suite alone couldn't catch a bug in the *actual*
+request shape sent to Anthropic, and it didn't: the first live call 400'd
+with `"tools.1.custom: For 'integer' type, properties maximum, minimum are
+not supported"` -- `_months_schema()`'s `minimum`/`maximum` constraints on
+the `months` tool parameter aren't valid in Anthropic tool input schemas.
+Fixed by moving the valid range into the description text (the analytics
+endpoints themselves still enforce 1-24) and re-verified live. The
+subsequent real run against realistic demo data produced genuinely
+well-reasoned, correctly-cited output (e.g. correctly flagging that idle
+cash sits in checking rather than a high-yield account, and an honest caveat
+that the then-current month was partial and not fully reliable), with
+`agent_run`/`ai_audit_log`/`ai_recommendation` all persisting correctly and
+real token counts recorded.
+
 ### Frontend
 
 `AIInsightsCard`: a persistent list of past recommendations (`GET
