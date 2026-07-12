@@ -355,16 +355,246 @@ None of the five enhancements require new infrastructure beyond Postgres + Redis
 Celery already in `docker-compose.yml` — all extend the `sync_job` table and
 normalization pipeline M2 already plans, not parallel subsystems.
 
+## Milestone 3 — Detailed Implementation Plan (built and verified)
+
+Goal: the modular financial analytics engine M1/M2 deliberately deferred --
+cash flow, net worth, burn rate, savings rate, debt payoff, expense trends,
+subscription detection, emergency fund health, and financial ratios -- computed
+from the real transaction/account data M1/M2 already ingest, with no new
+tables. Unblocks M4 (agents need real numbers to cite).
+
+### The sign-convention design decision
+
+The one subtlety the whole milestone hinges on: `transaction.amount` is signed
+relative to *its own account's* balance (`balance_before + amount ==
+balance_after`, per M2's reconciliation engine), not the user's total wealth.
+A positive amount is income on a checking/savings account but a new charge
+(real spending) on a credit card; a negative amount is an expense on
+checking/savings but a payment/credit on a credit card. `transaction_type`
+turned out *not* to be a usable classifier for this -- the M1/M2 pipelines
+default every non-transfer row to `PURCHASE` regardless of sign. So
+`app/analytics/common.py` classifies income/expense per transaction by
+`account_type` instead, documented in one place and reused by every module
+that needs it (`cash_flow`, `burn_rate`, `savings_rate`, `expense_trends`,
+`subscriptions`, `emergency_fund`, `debt_payoff`, `ratios`). Loans/mortgages
+are excluded from the expense side entirely -- there's no "purchase" concept
+there, only balance-reducing payments already reflected in the paying
+account's own outflow.
+
+### Structure
+
+```
+api/app/analytics/
+├── common.py           # MonthlyFlow, month_start/add_months, classify_flow, monthly_income_and_expenses
+├── engine.py            # AnalyticsEngine registry -- routers call modules directly for static typing;
+│                         # the registry exists so M4's agents get one generic run(metric, user_id, **params)
+├── modules/
+│   ├── net_worth.py      # migrated from the M1 NetWorthService (deleted)
+│   ├── cash_flow.py, burn_rate.py, savings_rate.py
+│   ├── expense_trends.py  # category-level rising/falling/steady vs. trailing average
+│   ├── subscriptions.py   # rule-based: >=2 charges, consistent cadence + amount within 10%
+│   ├── emergency_fund.py  # liquid assets / trailing avg. expenses, tiered health label
+│   ├── debt_payoff.py     # naive projection from trailing net paydown rate
+│   └── ratios.py          # composes emergency_fund/net_worth rather than re-deriving them
+└── reconciliation.py (M2, unchanged)
+```
+
+Every response schema (`app/schemas/analytics.py`) carries a `methodology`
+string alongside the numbers -- cheap to add now, and it's exactly the
+"why was this computed this way" text M4's explainability requirement needs
+agents to cite. `TransactionRepository.list_for_analytics()` adds one
+unpaginated, date-bounded fetch with `account`/`category_ref` eager-loaded,
+reused by every module instead of each hand-rolling a query.
+
+### Endpoints
+
+`GET /api/v1/analytics/{net-worth,cash-flow,burn-rate,savings-rate,
+expense-trends,subscriptions,emergency-fund,debt-payoff,ratios}`, each
+accepting an optional `months` window. 104 backend tests (up from 84),
+covering empty-state and realistic scenarios per module -- the trickiest
+category was date construction: tests originally placed "this month" fixtures
+at fixed day offsets, which silently broke depending on what day of the month
+the suite happened to run (a transaction dated after "today" is correctly
+excluded by the date-bounded query, so a fixture at day 6 fails if the suite
+runs on day 3). Fixed by using `date.today()` directly for single-day
+fixtures and fully-elapsed prior months for anything needing multiple
+distinct dates.
+
+### Frontend
+
+Six new dashboard widgets (`CashFlowChart`, `FinancialRatiosTile`,
+`EmergencyFundTile`, `ExpenseTrendsCard`, `SubscriptionsCard`,
+`DebtPayoffCard`) share one `AnalyticsCard` wrapper for the
+loading/error/content pattern `NetWorthTile` established in M1. Savings rate
+and burn rate are folded into one `FinancialRatiosTile` rather than three
+separate cards, since `ratios` already returns `savings_rate` and
+`liquidity_ratio_months` directly -- one less round trip and one less card.
+
+### Demo data
+
+`docs/demo-data/generate.py` produces two date-relative CSVs (checking +
+credit card, regenerated fresh before any demo) with merchant names chosen to
+match `merchant_normalizer.py`'s known-merchant table (Whole Foods, Netflix,
+Spotify, Uber, Starbucks), so expense trends and subscriptions have real
+categories/cadences to show instead of "Uncategorized." See
+`docs/demo-data/README.md` for the walkthrough.
+
+### Bugs found during hands-on verification (fixed, not just noted)
+
+Browser verification (Playwright driving the real app, not just curling the
+API) caught two real issues the API-level checks alone missed: the cash-flow
+chart's Y-axis labels were clipped to an unreadable "00.00" (a negative
+`margin.left` combined with a too-narrow axis `width` pushed long
+`formatCurrency` labels partly off the card -- fixed with a compact `$6k`-style
+axis formatter and a non-negative margin); and the "Net saving" stat showed a
+confusing negative sign (`average_monthly_burn` is negative when saving,
+which read fine next to "Burn rate" but not next to "Net saving" -- fixed by
+displaying the absolute value, since the label already encodes direction).
+
+## Milestone 4 — Detailed Implementation Plan (built and verified)
+
+Goal: the `AIProvider` adapter, audit plumbing, and the first real agent
+(Financial Advisor) end-to-end -- calling the analytics engine as tools and
+producing a structured, cited, confidence-scored recommendation. Unblocks M5
+(RAG plugs into this same pattern) and M6 (remaining agents reuse it as-is).
+
+### Model choice and sync-first design
+
+Default model is `claude-opus-4-8` (configurable via `AI_MODEL`), not
+downgraded for cost -- financial-advice quality is worth it, and it's the
+user's call to change, not a default this system picks. `AIProvider` is a
+**sync** interface, matching the rest of this codebase's sync
+SQLAlchemy/FastAPI style, rather than introducing async for one subsystem (a
+deliberate departure from this doc's original M1-era sketch, which predates
+the actual sync-Session pattern M1 shipped with).
+
+### Structured output: a terminal tool, not `output_config.format`
+
+The originally-sketched design paired `tools` with `output_config.format` on
+every turn so a final text answer would be schema-constrained. That combo is
+under-documented for multi-turn tool loops, so the safer, well-established
+pattern was used instead: `submit_recommendations` is declared as an
+ordinary strict-schema tool (`ToolDefinition`, `strict: true`,
+`additionalProperties: false`) alongside the analytics tools, with
+`tool_choice` left at its default `auto`. The agent loop treats a tool call
+to `submit_recommendations` as the terminal signal -- no reliance on
+`stop_reason == "end_turn"` or any interaction between two features at once.
+
+### Structure
+
+```
+api/app/ai/
+├── provider/
+│   ├── base.py             # AIProvider ABC -- generate() is concrete: persists an
+│   │                         # AIAuditLog row before returning, so audit logging is
+│   │                         # structurally impossible for an agent to bypass
+│   ├── anthropic_provider.py  # the only module that may `import anthropic`
+│   ├── fake_provider.py     # test double: scripted RawModelResults, real persistence
+│   └── dependency.py        # FastAPI DI seam -- routers depend on this, not the class
+├── tools/
+│   └── analytics_tools.py   # one strict-schema tool per M3 metric, wrapping AnalyticsEngine.run()
+└── agents/
+    └── financial_advisor.py # system prompt, tool-calling loop, FinancialAdviceResult
+```
+
+`AIProvider.generate()` is concrete (not abstract) precisely so persistence
+can't be an afterthought each agent has to remember -- only `_call_model()`
+(the actual network/fake call) is provider-specific. Every call also records
+token usage (input/output/cache-read/cache-creation) and latency for cost
+observability, seeding what M10's cost tracking will read.
+
+### Database (migration `0003`)
+
+- **agent_run**: one row per agent invocation (may span several model
+  calls). `status` (running/completed/failed), `user_message`,
+  `error_message`. `user_id` is nullable + `ON DELETE SET NULL` -- the AI
+  decision trail should survive account deletion, same reasoning as
+  `audit_log.user_id`.
+- **ai_audit_log**: one row per underlying model call. Hash-chained and
+  immutable -- the *exact* pattern from M2's `audit_log` (Enhancement 2),
+  applied here because a hash chain without an enforcement trigger only
+  *detects* tampering on demand; it doesn't prevent it. `prev_hash`/`row_hash`
+  are `NOT NULL` from creation (a new table, no M2-style nullable-then-
+  backfill needed). Stores `system_prompt`, `messages`, `tool_calls`,
+  `response` (full content blocks, including thinking-block summaries),
+  `stop_reason`, and token/latency metrics.
+- **ai_recommendation**: the user-facing deliverable -- `title`,
+  `explanation`, `category`, `confidence`, `citations` (which metrics backed
+  it), `status` (active/dismissed/completed). Deliberately separate from
+  `ai_audit_log`: the dashboard queries this table directly for "your AI
+  insights" without parsing raw audit JSON.
+
+### Financial Advisor agent
+
+System prompt requires citing which tool outputs back every recommendation
+and forbids inventing numbers a tool could supply exactly. The loop: send
+the user's message (or a default "general financial health check" prompt) +
+all M3 analytics tools + `submit_recommendations`; execute whatever tools
+Claude calls, feed results back; repeat up to `AI_MAX_TOOL_ITERATIONS` (default
+6) until `submit_recommendations` is called. If the budget is exhausted
+without a submission, the run is marked `failed` (`AgentIncompleteError`) --
+never fabricates a recommendation. A `stop_reason == "refusal"` is audit-
+logged like any other call, then raised as `AIRefusalError` rather than
+silently retried.
+
+### Endpoints
+
+`POST /api/v1/ai/financial-advisor/advice` (optional `message`, defaults to
+a general check-up) and `GET /api/v1/ai/recommendations`. Returns 503 with a
+clear message if `ANTHROPIC_API_KEY` isn't configured, rather than a raw SDK
+auth error.
+
+### Testing without live API calls
+
+`FakeAIProvider` pops pre-scripted `RawModelResult`s but runs every call
+through the *same* concrete `generate()` persistence path as the real
+provider -- tests exercise the actual audit/hash-chain logic, not a mocked-
+away version of it. 9 new tests (113 total): the immutability trigger
+(update/delete/truncate all rejected, mirroring M2's audit_log tests), the
+full agent loop (tool call -> submit -> recommendation + 2-row verified hash
+chain), the iteration-budget-exhausted failure path, the refusal path, and
+the HTTP endpoints with the provider swapped via FastAPI's dependency
+override. One consequence worth noting: `ai_audit_log`'s new immutability
+trigger meant the test suite's per-test cleanup (which bulk-deletes every
+table between tests) needed the same trigger-disable escape hatch
+`conftest.py` already used for `audit_log`.
+
+### Live verification (real Anthropic API, not the fake provider)
+
+The fake-provider test suite alone couldn't catch a bug in the *actual*
+request shape sent to Anthropic, and it didn't: the first live call 400'd
+with `"tools.1.custom: For 'integer' type, properties maximum, minimum are
+not supported"` -- `_months_schema()`'s `minimum`/`maximum` constraints on
+the `months` tool parameter aren't valid in Anthropic tool input schemas.
+Fixed by moving the valid range into the description text (the analytics
+endpoints themselves still enforce 1-24) and re-verified live. The
+subsequent real run against realistic demo data produced genuinely
+well-reasoned, correctly-cited output (e.g. correctly flagging that idle
+cash sits in checking rather than a high-yield account, and an honest caveat
+that the then-current month was partial and not fully reliable), with
+`agent_run`/`ai_audit_log`/`ai_recommendation` all persisting correctly and
+real token counts recorded.
+
+### Frontend
+
+`AIInsightsCard`: a persistent list of past recommendations (`GET
+/recommendations`, always loaded) plus a "Get advice" button (`POST
+/financial-advisor/advice`, user-triggered -- not auto-fetched, since it costs
+real tokens) that invalidates and refetches the list on success. Fills the
+"AI insights" dashboard placeholder from M1/M3.
+
 ## After approval
 
-M1 and M2 are both built and verified end-to-end (84 tests passing, mypy --strict
-and ruff clean, full Docker Compose stack including Celery worker/beat manually
-exercised against live stub connectors). A few specifics were refined during
-hands-on M2 implementation versus the original spec: `ofxparse` was used over
-`ofxtools` for OFX parsing; the shared `imports.py` schema replaced the CSV-only
-`csv_import.py` once OFX needed the same response shape; the audit-log
-immutability trigger also covers `TRUNCATE` (a separate Postgres trigger event
-that a bare `DELETE` trigger doesn't catch); and four DB-backed pipeline lookups
-(dedup, merchant resolution, transfer/refund matching) were bundled into a single
+M1 through M4 are all built and verified end-to-end (113 tests passing,
+mypy --strict and ruff clean, full Docker Compose stack, and the dashboard
+manually driven end-to-end in a real browser against realistic demo data). A
+few specifics were refined during hands-on M2 implementation versus the
+original spec: `ofxparse` was used over `ofxtools` for OFX parsing; the shared
+`imports.py` schema replaced the CSV-only `csv_import.py` once OFX needed the
+same response shape; the audit-log immutability trigger also covers
+`TRUNCATE` (a separate Postgres trigger event that a bare `DELETE` trigger
+doesn't catch); and four DB-backed pipeline lookups (dedup, merchant
+resolution, transfer/refund matching) were bundled into a single
 `PipelineDependencies` object rather than four growing callback parameters.
-Milestone 3 (financial analytics engine) is next.
+Milestone 5 (the RAG pipeline: pgvector, hybrid retrieval, IRS/SEC/
+Investopedia corpus, citations wired into the Financial Advisor) is next.

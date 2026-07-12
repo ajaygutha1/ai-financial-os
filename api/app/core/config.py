@@ -25,6 +25,15 @@ class Settings(BaseSettings):
 
     cors_allow_origins: str = "http://localhost:3000"
 
+    # --- AI (Milestone 4) ---
+    anthropic_api_key: str = ""
+    # Opus-tier by default -- financial-advice quality is worth the cost, and
+    # it's the user's call to downgrade, not a default we pick for them.
+    ai_model: str = "claude-opus-4-8"
+    ai_max_tokens: int = 8192
+    ai_effort: str = "high"
+    ai_max_tool_iterations: int = 6
+
     @property
     def session_secret(self) -> str:
         """Signs the transient OAuth 'state' cookie. Distinct in principle from

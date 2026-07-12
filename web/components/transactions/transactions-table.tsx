@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Inbox } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,15 +37,19 @@ export function TransactionsTable() {
 
   if (!data || data.items.length === 0) {
     return (
-      <div className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
-        No transactions yet. Import a CSV to get started.
+      <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border p-12 text-center">
+        <Inbox className="size-8 text-muted-foreground" />
+        <p className="text-sm font-medium">No transactions yet</p>
+        <p className="text-sm text-muted-foreground">
+          Import a CSV to bring in your history.
+        </p>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      <div className="rounded-md border">
+      <div className="overflow-hidden rounded-xl border border-border">
         <Table>
           <TableHeader>
             <TableRow>
@@ -56,33 +61,32 @@ export function TransactionsTable() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {data.items.map((transaction) => (
-              <TableRow key={transaction.id}>
-                <TableCell className="whitespace-nowrap text-muted-foreground">
-                  {formatDate(transaction.posted_at)}
-                </TableCell>
-                <TableCell className="font-medium">
-                  {transaction.merchant_normalized ?? transaction.description ?? "--"}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {transaction.category ?? "Uncategorized"}
-                </TableCell>
-                <TableCell
-                  className={`text-right font-medium ${
-                    Number.parseFloat(transaction.amount) < 0
-                      ? "text-foreground"
-                      : "text-emerald-600"
-                  }`}
-                >
-                  {formatCurrency(transaction.amount)}
-                </TableCell>
-                <TableCell>
-                  {transaction.is_duplicate_of && (
-                    <Badge variant="secondary">Duplicate</Badge>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
+            {data.items.map((transaction) => {
+              const amount = Number.parseFloat(transaction.amount);
+              const isCredit = amount >= 0;
+              return (
+                <TableRow key={transaction.id}>
+                  <TableCell className="whitespace-nowrap text-muted-foreground">
+                    {formatDate(transaction.posted_at)}
+                  </TableCell>
+                  <TableCell className="font-medium">
+                    {transaction.merchant_normalized ?? transaction.description ?? "--"}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {transaction.category ?? "Uncategorized"}
+                  </TableCell>
+                  <TableCell className="text-right font-medium tabular-nums">
+                    {isCredit ? "+" : ""}
+                    {formatCurrency(transaction.amount)}
+                  </TableCell>
+                  <TableCell>
+                    {transaction.is_duplicate_of && (
+                      <Badge variant="secondary">Duplicate</Badge>
+                    )}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </div>
