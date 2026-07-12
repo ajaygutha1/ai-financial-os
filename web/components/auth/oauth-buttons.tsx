@@ -31,6 +31,7 @@ export function OAuthButtons() {
     <div className="grid grid-cols-2 gap-3">
       <Button
         variant="outline"
+        nativeButton={false}
         render={<a href={`${API_BASE_URL}/api/v1/auth/oauth/google`} />}
       >
         <GoogleIcon />
@@ -38,6 +39,7 @@ export function OAuthButtons() {
       </Button>
       <Button
         variant="outline"
+        nativeButton={false}
         render={<a href={`${API_BASE_URL}/api/v1/auth/oauth/github`} />}
       >
         <GitHubIcon />
