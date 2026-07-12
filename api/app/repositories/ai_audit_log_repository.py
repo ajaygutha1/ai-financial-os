@@ -8,6 +8,11 @@ from sqlalchemy.orm import Session
 from app.core.ai_audit_hash import GENESIS_HASH, compute_ai_audit_row_hash
 from app.models.ai_audit_log import AIAuditLog
 
+# Distinct from AuditLogRepository's lock key -- each chain gets its own
+# advisory lock so the two audit logs don't unnecessarily serialize against
+# each other.
+_AI_AUDIT_LOG_CHAIN_LOCK_KEY = 8_942_017_331_204_456
+
 
 class AIAuditLogRepository:
     def __init__(self, db: Session) -> None:
@@ -71,12 +76,19 @@ class AIAuditLogRepository:
         return list(self.db.scalars(stmt))
 
     def _latest_row_hash(self) -> str:
-        # FOR UPDATE serializes concurrent record() calls against the same
-        # session's transaction, same reasoning as AuditLogRepository.
+        # `SELECT ... FOR UPDATE ORDER BY ... LIMIT 1` only locks whichever
+        # row is currently latest -- it does not stop a second, concurrent
+        # transaction from resolving to that same row under READ COMMITTED
+        # and computing the same prev_hash, forking the chain (same bug
+        # AuditLogRepository had). A transaction-scoped advisory lock on a
+        # fixed key instead serializes every record() call globally: the
+        # first caller holds the lock until it commits or rolls back, so the
+        # next caller blocks here and then genuinely observes the first
+        # caller's newly-committed row as latest.
+        self.db.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"), {"key": _AI_AUDIT_LOG_CHAIN_LOCK_KEY}
+        )
         result = self.db.execute(
-            text(
-                "SELECT row_hash FROM ai_audit_log "
-                "ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE"
-            )
+            text("SELECT row_hash FROM ai_audit_log ORDER BY created_at DESC, id DESC LIMIT 1")
         ).first()
         return result[0] if result else GENESIS_HASH
