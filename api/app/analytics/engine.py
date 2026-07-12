@@ -16,6 +16,10 @@ from app.analytics.modules import (
     savings_rate,
     subscriptions,
 )
+from app.core.exceptions import ValidationError
+
+_MIN_MONTHS = 1
+_MAX_MONTHS = 24
 
 ComputeFn = Callable[..., BaseModel]
 
@@ -53,4 +57,19 @@ class AnalyticsEngine:
         compute_fn = _REGISTRY.get(metric)
         if compute_fn is None:
             raise UnknownMetricError(metric)
+        # The FastAPI routers validate `months` via Query(ge=1, le=24), but
+        # this is also the AI tool-calling entry point (see
+        # app/ai/tools/analytics_tools.py) -- Anthropic tool schemas can't
+        # express numeric min/max, so a model-supplied out-of-range value
+        # reaches here unvalidated and would otherwise blow up as a raw
+        # ZeroDivisionError/IndexError deep in a module.
+        if "months" in params:
+            months = params["months"]
+            if not isinstance(months, int) or isinstance(months, bool) or not (
+                _MIN_MONTHS <= months <= _MAX_MONTHS
+            ):
+                raise ValidationError(
+                    f"months must be an integer between {_MIN_MONTHS} and {_MAX_MONTHS}, "
+                    f"got {months!r}."
+                )
         return compute_fn(self.db, user_id, **params)
