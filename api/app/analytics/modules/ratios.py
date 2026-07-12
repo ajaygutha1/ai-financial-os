@@ -34,7 +34,7 @@ def compute(db: Session, user_id: uuid.UUID, *, months: int = DEFAULT_MONTHS) ->
         nw = net_worth.compute(db, user_id)
         debt_to_annual_income = nw.liabilities_total / annualized_income
 
-    fund = emergency_fund.compute(db, user_id)
+    fund = emergency_fund.compute(db, user_id, months=months)
 
     return RatiosResponse(
         savings_rate=savings_rate,

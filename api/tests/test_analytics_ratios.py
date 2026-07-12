@@ -66,3 +66,10 @@ def test_ratios_computed_with_income_and_debt(
     assert Decimal(body["expense_to_income_ratio"]) == Decimal("0.75")
     # annualized income = 4000 * 12 = 48000; liabilities = 2400 -> ratio = 0.05
     assert Decimal(body["debt_to_annual_income"]) == Decimal("0.05")
+    # liquidity_ratio_months must honor the requested months=1 window, not
+    # emergency_fund's own DEFAULT_MONTHS=3 -- test_account's balance (1000)
+    # over 1 month of 3000 in expenses is 1/3 months of coverage; if ratios.py
+    # silently called emergency_fund.compute() with no months kwarg, the
+    # 3-month-average expense figure (1000, since the other 2 months are
+    # zero-filled) would instead read as a full 1.0 months of coverage.
+    assert Decimal(body["liquidity_ratio_months"]) == Decimal("1000") / Decimal("3000")
