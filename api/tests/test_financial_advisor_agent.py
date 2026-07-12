@@ -1,13 +1,15 @@
 from typing import Any
 
+import pydantic
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.agents.financial_advisor import AgentIncompleteError, FinancialAdvisorAgent
 from app.ai.provider.base import AIRefusalError, RawModelResult, ToolUseCall, UsageInfo
 from app.ai.provider.fake_provider import FakeAIProvider
 from app.core.ai_audit_verify import verify_ai_audit_log_chain
-from app.models.agent_run import AgentRunStatus
+from app.models.agent_run import AgentRun, AgentRunStatus
 from app.models.user import User
 from app.repositories.agent_run_repository import AgentRunRepository
 from app.repositories.ai_recommendation_repository import AIRecommendationRepository
@@ -111,3 +113,46 @@ def test_agent_marks_run_failed_on_refusal(db_session: Session, test_user: User)
     # The refused call is still audit-logged before the error propagates.
     verification = verify_ai_audit_log_chain(db_session)
     assert verification.rows_checked == 1
+
+
+def test_out_of_range_confidence_fails_cleanly_without_losing_audit_trail(
+    db_session: Session, test_user: User
+) -> None:
+    # A model-reported confidence outside 0-1 can't be caught by the tool
+    # schema (Anthropic schemas can't express min/max), so it must fail at
+    # FinancialAdviceResult.model_validate() instead of overflowing the
+    # Numeric(3,2) confidence column. Critically, the tool-call audit row
+    # from the *first* model turn (net_worth) must still be preserved and
+    # the run marked failed, not silently lost.
+    script = [
+        _tool_call_result("net_worth", {}),
+        _submit_result(
+            {
+                "title": "Overconfident",
+                "explanation": "Bogus confidence value from the model.",
+                "category": "general",
+                "confidence": 15.0,
+                "metrics_used": ["net_worth"],
+            }
+        ),
+    ]
+    provider = FakeAIProvider(db_session, script)
+    agent = FinancialAdvisorAgent(db_session, provider)
+
+    with pytest.raises(pydantic.ValidationError):
+        agent.run(user_id=test_user.id, user_message="How am I doing?")
+
+    assert AIRecommendationRepository(db_session).list_for_user(test_user.id) == []
+
+    run = db_session.scalars(
+        select(AgentRun).where(AgentRun.user_id == test_user.id)
+    ).one()
+    assert run.status == AgentRunStatus.FAILED
+
+    # Both model turns (the tool call and the invalid submit attempt) were
+    # already audit-logged by generate() before validation failed -- that
+    # trail, and the FAILED run status, must be durably committed rather
+    # than rolled back with nothing to show for the run.
+    verification = verify_ai_audit_log_chain(db_session)
+    assert verification.rows_checked == 2
+    assert verification.first_divergent_id is None

@@ -3,7 +3,7 @@ import uuid
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.ai.provider.base import AICallMetadata, AIProvider, ToolDefinition
@@ -46,7 +46,11 @@ class RecommendationItem(BaseModel):
     title: str
     explanation: str
     category: Literal["emergency_fund", "debt", "savings", "spending", "subscriptions", "general"]
-    confidence: float
+    # Anthropic tool schemas can't express minimum/maximum (same limitation as
+    # analytics_tools.py's months param) -- bounding it here means a
+    # model-reported confidence outside 0-1 fails cleanly at
+    # model_validate() instead of overflowing the Numeric(3,2) DB column.
+    confidence: float = Field(ge=0.0, le=1.0)
     metrics_used: list[str]
 
 
@@ -91,6 +95,14 @@ class FinancialAdvisorAgent:
             user_message=user_message,
         )
 
+        # Persisting recommendations is inside the same try/except as the
+        # model loop -- every audit-log row generate() flushed during
+        # _run_loop() is only committed once, at the bottom, alongside the
+        # final run status. If persistence fails (e.g. a DB constraint) after
+        # the loop already succeeded, the except branch below still commits
+        # a FAILED run and everything flushed so far, rather than letting an
+        # uncaught exception propagate with nothing durably saved -- losing
+        # the very audit trail this class exists to guarantee.
         try:
             result = self._run_loop(
                 user_id=user_id,
@@ -98,28 +110,28 @@ class FinancialAdvisorAgent:
                 user_message=user_message,
                 max_iterations=settings.ai_max_tool_iterations,
             )
+            self.agent_runs.mark_completed(run)
+            for item in result.recommendations:
+                self.recommendations.create(
+                    agent_run_id=run.id,
+                    user_id=user_id,
+                    agent_name=AGENT_NAME,
+                    title=item.title,
+                    explanation=item.explanation,
+                    category=item.category,
+                    confidence=Decimal(str(round(item.confidence, 2))),
+                    citations={
+                        "metrics_used": item.metrics_used,
+                        "reasoning_summary": result.reasoning_summary,
+                    },
+                    prompt_version=PROMPT_VERSION,
+                    model=settings.ai_model,
+                )
         except Exception as exc:
             self.agent_runs.mark_failed(run, error_message=str(exc))
             self.db.commit()
             raise
 
-        self.agent_runs.mark_completed(run)
-        for item in result.recommendations:
-            self.recommendations.create(
-                agent_run_id=run.id,
-                user_id=user_id,
-                agent_name=AGENT_NAME,
-                title=item.title,
-                explanation=item.explanation,
-                category=item.category,
-                confidence=Decimal(str(round(item.confidence, 2))),
-                citations={
-                    "metrics_used": item.metrics_used,
-                    "reasoning_summary": result.reasoning_summary,
-                },
-                prompt_version=PROMPT_VERSION,
-                model=settings.ai_model,
-            )
         self.db.commit()
         return result
 
