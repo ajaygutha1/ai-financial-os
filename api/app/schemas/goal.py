@@ -4,6 +4,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
+from app.models.goal import GoalStatus
+
 
 class GoalCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
@@ -23,7 +25,7 @@ class GoalUpdate(BaseModel):
     target_date: date | None = None
     linked_account_id: uuid.UUID | None = None
     manual_current_amount: Decimal | None = None
-    status: str | None = None
+    status: GoalStatus | None = None
 
 
 class GoalPublic(BaseModel):

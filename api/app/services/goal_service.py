@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
@@ -27,6 +28,7 @@ class GoalService:
     def create(self, user_id: uuid.UUID, payload: GoalCreate) -> Goal:
         if payload.linked_account_id is not None:
             self._validate_linked_account(user_id, payload.linked_account_id)
+            self._validate_exclusive_tracking(payload.manual_current_amount)
 
         goal = self.goals.create(
             user_id=user_id,
@@ -46,6 +48,11 @@ class GoalService:
         if "linked_account_id" in updates and updates["linked_account_id"] is not None:
             self._validate_linked_account(user_id, updates["linked_account_id"])
 
+        final_linked_account_id = updates.get("linked_account_id", goal.linked_account_id)
+        final_manual_amount = updates.get("manual_current_amount", goal.manual_current_amount)
+        if final_linked_account_id is not None:
+            self._validate_exclusive_tracking(final_manual_amount)
+
         for field, value in updates.items():
             setattr(goal, field, value)
 
@@ -61,3 +68,14 @@ class GoalService:
         account = self.accounts.get_by_id(account_id)
         if account is None or account.user_id != user_id:
             raise ValidationError("linked_account_id must reference one of your own accounts.")
+
+    def _validate_exclusive_tracking(self, manual_current_amount: Decimal) -> None:
+        # A goal tracks progress via exactly one of linked_account_id or
+        # manual_current_amount, never both (see Goal's docstring) -- only
+        # actually enforced here; previously the comment promised this but
+        # nothing checked it.
+        if manual_current_amount != 0:
+            raise ValidationError(
+                "manual_current_amount must be left at 0 when linked_account_id is set -- "
+                "a goal tracks progress via exactly one of the two."
+            )

@@ -160,6 +160,85 @@ def test_delete_goal(client: TestClient, auth_headers: dict[str, str]) -> None:
     assert response.status_code == 404
 
 
+def test_create_goal_linked_account_rejects_nonzero_manual_amount(
+    client: TestClient, auth_headers: dict[str, str], test_account: Account
+) -> None:
+    response = client.post(
+        "/api/v1/goals",
+        headers=auth_headers,
+        json={
+            "name": "Contradictory goal",
+            "target_amount": "1000.00",
+            "linked_account_id": str(test_account.id),
+            "manual_current_amount": "50.00",
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_update_goal_setting_linked_account_rejects_existing_nonzero_manual_amount(
+    client: TestClient, auth_headers: dict[str, str], test_account: Account
+) -> None:
+    created = client.post(
+        "/api/v1/goals",
+        headers=auth_headers,
+        json={
+            "name": "Manually tracked",
+            "target_amount": "1000.00",
+            "manual_current_amount": "50.00",
+        },
+    ).json()
+
+    response = client.patch(
+        f"/api/v1/goals/{created['id']}",
+        headers=auth_headers,
+        json={"linked_account_id": str(test_account.id)},
+    )
+    assert response.status_code == 422
+
+
+def test_update_goal_status_rejects_invalid_value(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    created = client.post(
+        "/api/v1/goals",
+        headers=auth_headers,
+        json={"name": "Status test", "target_amount": "100.00"},
+    ).json()
+
+    # Regression: status was previously a plain `str` with no enum
+    # constraint -- a bogus value either persisted uninterpreted or, past
+    # the column's 16-char limit, threw an unhandled 500 instead of a clean
+    # validation error.
+    response = client.patch(
+        f"/api/v1/goals/{created['id']}",
+        headers=auth_headers,
+        json={"status": "totally-not-a-real-status"},
+    )
+    assert response.status_code == 422
+
+    unchanged = client.get(f"/api/v1/goals/{created['id']}", headers=auth_headers)
+    assert unchanged.json()["status"] == "active"
+
+
+def test_update_goal_status_accepts_valid_value(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    created = client.post(
+        "/api/v1/goals",
+        headers=auth_headers,
+        json={"name": "Status test", "target_amount": "100.00"},
+    ).json()
+
+    response = client.patch(
+        f"/api/v1/goals/{created['id']}",
+        headers=auth_headers,
+        json={"status": "completed"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+
+
 def test_progress_pct_caps_at_100(client: TestClient, auth_headers: dict[str, str]) -> None:
     response = client.post(
         "/api/v1/goals",
