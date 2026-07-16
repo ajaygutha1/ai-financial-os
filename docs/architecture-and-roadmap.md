@@ -865,18 +865,162 @@ through the shared loop and that `build_tools()` is correctly scoped; a
 recovery test replaying the exact malformed shape observed live; and router
 tests for the registry (`GET /agents`, unknown-slug 404, dispatch-by-slug).
 
+## Milestone 7 — Detailed Implementation Plan (built and verified)
+
+Goal: the full dashboard -- every panel the roadmap named (allocation, debt,
+bills, budget, portfolio, insights, risk, forecasts, goals), and genuine
+near-real-time updates via SSE, not just polling.
+
+### Scoping decisions made before writing any code
+
+Research before this milestone found that "full dashboard" was a much bigger
+bundle than it looked: two of the nine named panels (forecasts, goals) had
+*zero* backing data anywhere (no model, no module), "budget" had only a
+stateless AI agent with nothing persisted, and the entire live-delivery side
+of "near-real-time" (an SSE endpoint, a Redis subscriber, a frontend client)
+was greenfield -- only the durable outbox half (`domain_events` table,
+`EventBus.record()`/`dispatch()`) existed, wired into CSV/OFX import and
+connector sync but with zero consumers. Three decisions were made explicitly
+with the user before building, rather than guessed:
+
+1. **Real-time mechanism: full SSE**, not polling -- the bigger, riskier
+   lift, chosen deliberately over the simpler `refetchInterval` alternative.
+2. **Goals: build a real, persisted feature now**, not deferred.
+3. **Budget: add a lightweight persisted `BudgetTarget` model**, upgrading
+   M6's stateless Budget Coach agent rather than leaving it framework-only.
+
+Two panels needed no new backend at all: **allocation** (`net_worth`'s
+existing `by_account_type` breakdown, M3) just needed a dashboard tile, and
+**bills** is the existing `subscriptions` module (M3) re-sorted by
+`next_expected_date` into an `UpcomingBillsCard` that complements rather than
+duplicates the merchant/cadence-focused `SubscriptionsCard`.
+
+### Prerequisite: `domain_events` gained a `user_id`
+
+`DomainEventLog` was deliberately polymorphic (`aggregate_type`/
+`aggregate_id`, no `user_id`) -- fine when nothing consumed it live, but the
+SSE stream needs to deliver only one user's own events without joining back
+through aggregate-type-specific tables to figure out ownership. Added
+`user_id` (nullable, indexed, no backfill needed) to the Pydantic
+`DomainEvent` base and the SQLAlchemy row, threaded through both existing
+emitters (`ingestion_common.py`, `sync_service.py`). The Redis publish
+channel changed from `domain_events.{aggregate_type}` to
+`domain_events.user.{user_id}`, so the SSE subscriber needs exactly one
+channel per connected user instead of a firehose it would filter
+client-side.
+
+### Goals
+
+`Goal` either tracks a linked account's live balance or a manually-updated
+running total, never both -- `current_amount` and `progress_pct` are
+computed properties, not stored columns. `progress_pct` is explicitly
+quantized to `Decimal("0.0001")` to match every other money column's
+precision, since pure Python `Decimal` division otherwise returns a
+variable, input-dependent number of decimal places rather than a fixed
+scale -- the same fix was needed again later for `budget_vs_actual`'s
+`pct_used`. Full CRUD at `/api/v1/goals`, ownership-checked (a goal can't
+link to another user's account).
+
+### Budget
+
+`BudgetTarget`: one monthly target per `(user, category)`, upsert semantics
+(setting a category's target again overwrites it rather than creating a
+duplicate). New `budget_vs_actual` analytics module compares this *calendar
+month's* actual category spend against targets -- deliberately always the
+current month, not a configurable trailing window like every other module,
+since budgets are inherently monthly. This upgrades Budget Coach (M6) from
+purely stateless: it now checks `budget_vs_actual` first and compares
+against real targets when they exist, falling back to a generic
+50/30/20-style suggestion only when none are set, and must say plainly
+which case it's in. A small `GET /api/v1/categories` endpoint was added too
+-- categories were previously only ever resolved by name during ingestion,
+never listed, and the budget-target picker needed something to list.
+
+### Forecast
+
+Naive straight-line projection: trailing-window average monthly net cash
+flow added to current net worth, once per month, for 6 months. Explicitly
+documented as not a real forecast model (no one-off-event, seasonality, or
+growth-rate modeling) -- same category of naive projection as `debt_payoff`'s
+payoff estimate, and the frontend chart repeats the caveat in a caption
+rather than only in an API `methodology` field a user never sees.
+
+### SSE: ticket-based auth, not the access token in a URL
+
+`EventSource` can't send a custom `Authorization` header, so the normal
+15-minute bearer access token can't be used directly for the stream
+connection -- and putting it in a URL (which browsers, proxies, and access
+logs routinely record) is a worse tradeoff than a ticket that's dead within
+seconds. `POST /api/v1/events/ticket` (normal bearer auth) issues a
+Redis-backed, single-use, 30-second-TTL ticket; `GET /api/v1/events/stream`
+consumes it (`GETDEL`, so reuse fails) and subscribes to
+`domain_events.user.{user_id}` via a real async Redis client, streaming
+SSE-formatted messages with a 15-second keepalive ping. The frontend
+`useLiveUpdates` hook mints a ticket, opens the `EventSource`, and coarsely
+invalidates every TanStack Query on any message -- a domain event can move
+numbers on nearly every panel, so a fine-grained event-type -> query-key map
+wasn't worth building yet. Reconnect-on-error is custom rather than
+`EventSource`'s built-in reconnect, since the built-in version would replay
+the same now-consumed ticket and fail every time.
+
+**Two real bugs found while building this, both fixed:**
+
+- The async Redis client was `@lru_cache`'d like its sync counterpart (used
+  for `EventBus.dispatch()`), but an async client's connections are bound to
+  the event loop that created them -- a cached singleton reused from a
+  different loop (a new test, a worker restart) raises `RuntimeError: Event
+  loop is closed`. Removed the cache; constructing a fresh client is cheap
+  since `from_url` doesn't eagerly connect.
+- Testing the stream endpoint through `TestClient` hung indefinitely: an
+  open-ended `StreamingResponse` body never completes until the client
+  disconnects, and `TestClient`'s in-process ASGI transport doesn't reliably
+  propagate an early client-side close into server-side generator
+  cancellation the way a real network disconnect would. Tests call the
+  streaming coroutine and consume its `body_iterator` directly instead, with
+  an explicit `asyncio.wait_for` timeout, sidestepping the transport
+  entirely rather than fighting it.
+
+Live-verified in a real browser rather than trusting the unit tests alone:
+an import triggered from a completely separate session (a second login, no
+shared browser state) caused the open dashboard to automatically refetch
+every analytics query within ~400ms with no manual reload -- the actual
+publish -> Redis -> stream -> `EventSource` -> `invalidateQueries` ->
+refetch pipeline, working end to end.
+
+### A note on environment reliability during this milestone
+
+Several edits made mid-session were found to have silently reverted on disk
+moments after being written (confirmed via `git diff` going empty right
+after a successful edit) -- most likely Docker Desktop's bind-mount file
+sync racing with host-side Alembic commands run while the `api` container
+(which mounts the same directory) was live. Every file touched in this
+milestone was re-verified immediately after writing with a direct `git diff`
+before moving on, and small, fully-tested checkpoints were committed
+throughout rather than one commit at the end, specifically to bound how much
+work could ever be at risk from a repeat.
+
+### Testing
+
+27 new tests (199 total): Goals CRUD and ownership checks; Budget CRUD,
+upsert semantics, and `budget_vs_actual`'s current-month comparison;
+forecast's flat-projection and average-net-flow-driven projection cases; and
+the SSE ticket/stream logic (issuance, single-use consumption, invalid/reused
+rejection, and the connected-message handshake) exercised as direct coroutine
+calls rather than through `TestClient` for the reasons above.
+
 ## After approval
 
-M1 through M6 are all built and verified end-to-end (172 tests passing,
+M1 through M7 are all built and verified end-to-end (199 tests passing,
 mypy --strict and ruff clean, full Docker Compose stack, and the dashboard
-manually driven end-to-end in a real browser against realistic demo data). A
-few specifics were refined during hands-on M2 implementation versus the
-original spec: `ofxparse` was used over `ofxtools` for OFX parsing; the shared
-`imports.py` schema replaced the CSV-only `csv_import.py` once OFX needed the
-same response shape; the audit-log immutability trigger also covers
-`TRUNCATE` (a separate Postgres trigger event that a bare `DELETE` trigger
-doesn't catch); and four DB-backed pipeline lookups (dedup, merchant
-resolution, transfer/refund matching) were bundled into a single
-`PipelineDependencies` object rather than four growing callback parameters.
-Milestone 7 (the full dashboard -- every panel, near-real-time via
-SSE/polling) is next.
+manually driven end-to-end in a real browser against realistic demo data,
+including a genuine cross-session SSE live-update). A few specifics were
+refined during hands-on M2 implementation versus the original spec:
+`ofxparse` was used over `ofxtools` for OFX parsing; the shared `imports.py`
+schema replaced the CSV-only `csv_import.py` once OFX needed the same
+response shape; the audit-log immutability trigger also covers `TRUNCATE` (a
+separate Postgres trigger event that a bare `DELETE` trigger doesn't catch);
+and four DB-backed pipeline lookups (dedup, merchant resolution,
+transfer/refund matching) were bundled into a single `PipelineDependencies`
+object rather than four growing callback parameters. Milestone 8 (security
+hardening -- RBAC, rate limiting, JWT refresh hardening, secrets management,
+an OWASP pass) is next.
