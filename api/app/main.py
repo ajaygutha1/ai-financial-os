@@ -5,7 +5,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.core.config import get_settings
 from app.core.exceptions import AppError, app_error_handler
 from app.core.logging import configure_logging
-from app.routers.v1 import accounts, ai, analytics, auth, imports, transactions
+from app.routers.v1 import accounts, ai, analytics, auth, goals, imports, transactions
 
 
 def create_app() -> FastAPI:
@@ -31,6 +31,7 @@ def create_app() -> FastAPI:
     app.include_router(imports.router, prefix="/api/v1")
     app.include_router(analytics.router, prefix="/api/v1")
     app.include_router(ai.router, prefix="/api/v1")
+    app.include_router(goals.router, prefix="/api/v1")
 
     @app.get("/health")
     def health() -> dict[str, str]:

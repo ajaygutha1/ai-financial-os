@@ -6,6 +6,7 @@ from app.models.audit_log import AuditLog
 from app.models.category import Category
 from app.models.connector_credential import ConnectorCredential
 from app.models.domain_event import DomainEventLog
+from app.models.goal import Goal
 from app.models.merchant import Merchant
 from app.models.rag_chunk import RAGChunk
 from app.models.rag_document import RAGDocument
@@ -23,6 +24,7 @@ __all__ = [
     "Category",
     "ConnectorCredential",
     "DomainEventLog",
+    "Goal",
     "Merchant",
     "RAGChunk",
     "RAGDocument",
