@@ -13,4 +13,7 @@ export const queryKeys = {
   ratios: (months: number) => ["analytics", "ratios", months] as const,
   aiRecommendations: ["ai", "recommendations"] as const,
   goals: ["goals"] as const,
+  categories: ["categories"] as const,
+  budgetTargets: ["budget", "targets"] as const,
+  budgetVsActual: ["analytics", "budget-vs-actual"] as const,
 };

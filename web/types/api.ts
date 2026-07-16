@@ -200,3 +200,32 @@ export interface Goal {
   status: string;
   created_at: string;
 }
+
+export interface Category {
+  id: string;
+  name: string;
+  parent_id: string | null;
+}
+
+export interface BudgetTarget {
+  id: string;
+  category_id: string;
+  category_name: string;
+  monthly_target_amount: string;
+  created_at: string;
+}
+
+export interface BudgetCategoryActual {
+  category_id: string;
+  category_name: string;
+  target_amount: string;
+  actual_amount: string;
+  remaining: string;
+  pct_used: string;
+}
+
+export interface BudgetVsActualResponse {
+  categories: BudgetCategoryActual[];
+  month: string;
+  methodology: string;
+}
