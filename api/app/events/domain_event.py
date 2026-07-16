@@ -14,10 +14,14 @@ class DomainEvent(BaseModel):
     aggregate_type: ClassVar[str]
 
     aggregate_id: uuid.UUID
+    # Added in Milestone 7 so the SSE stream can deliver only this user's own
+    # events -- every event that exists today already happens inside a
+    # user-scoped request, so this is always available at the call site.
+    user_id: uuid.UUID
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     def payload(self) -> dict[str, Any]:
-        return self.model_dump(mode="json", exclude={"aggregate_id", "occurred_at"})
+        return self.model_dump(mode="json", exclude={"aggregate_id", "user_id", "occurred_at"})
 
 
 class TransactionsImported(DomainEvent):

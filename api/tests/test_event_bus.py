@@ -43,6 +43,7 @@ def test_event_record_is_rolled_back_with_its_transaction(db_session: Session) -
     event_bus = EventBus(db_session)
     event = TransactionsImported(
         aggregate_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
         transaction_ids=[],
         imported_count=0,
         duplicate_count=0,
@@ -68,6 +69,7 @@ def test_dispatch_swallows_redis_errors(
     event_bus = EventBus(db_session)
     event = TransactionsImported(
         aggregate_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
         transaction_ids=[],
         imported_count=0,
         duplicate_count=0,

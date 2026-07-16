@@ -125,6 +125,7 @@ class SyncService:
 
         imported_event = TransactionsImported(
             aggregate_id=account.id,
+            user_id=account.user_id,
             transaction_ids=[txn.id for txn in result.transactions],
             imported_count=result.imported_count,
             duplicate_count=result.duplicate_count,
@@ -141,6 +142,7 @@ class SyncService:
 
         sync_completed_event = SyncCompleted(
             aggregate_id=job.id,
+            user_id=account.user_id,
             account_id=account.id,
             status=SyncJobStatus.COMPLETED.value,
             reconciliation_status=reconciliation.status,

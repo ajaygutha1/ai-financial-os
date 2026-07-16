@@ -26,6 +26,7 @@ class EventBus:
             payload=event.payload(),
             aggregate_type=event.aggregate_type,
             aggregate_id=event.aggregate_id,
+            user_id=event.user_id,
             occurred_at=event.occurred_at,
         )
         self.db.add(log_row)
@@ -38,10 +39,14 @@ class EventBus:
         The durable source of truth is the domain_events table itself; a
         consumer needing guaranteed delivery reads that table rather than
         relying on this push.
+
+        Published per-user (not per-aggregate-type) -- the only consumer is
+        Milestone 7's SSE stream, which needs exactly one user's own events,
+        not a firehose it would have to filter client-side.
         """
         try:
             client = get_redis_client()
-            channel = f"domain_events.{event.aggregate_type}"
+            channel = f"domain_events.user.{event.user_id}"
             client.publish(
                 channel,
                 json.dumps(

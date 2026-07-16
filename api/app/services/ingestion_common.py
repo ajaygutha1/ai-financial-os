@@ -108,6 +108,7 @@ def persist_pipeline_result(
 
     event = TransactionsImported(
         aggregate_id=account_id,
+        user_id=user_id,
         transaction_ids=[txn.id for txn in result.transactions],
         imported_count=result.imported_count,
         duplicate_count=result.duplicate_count,

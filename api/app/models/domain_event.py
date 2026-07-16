@@ -26,6 +26,11 @@ class DomainEventLog(UUIDPKMixin, Base):
     # No FK on aggregate_id -- deliberately polymorphic (transaction/account/sync_job).
     aggregate_type: Mapped[str] = mapped_column(String(64), nullable=False)
     aggregate_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    # Nullable (not FK-enforced, no backfill for pre-existing rows) -- added
+    # in Milestone 7 specifically so the SSE stream can filter delivery to
+    # one user's own events without joining back through aggregate_type-
+    # specific tables to figure out who an event belongs to.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
