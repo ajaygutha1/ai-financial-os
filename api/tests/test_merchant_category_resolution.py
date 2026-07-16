@@ -158,8 +158,6 @@ def test_concurrent_category_creation_does_not_raise_integrity_error(
     assert results[0] == results[1]
 
     all_matching = list(
-        db_session.scalars(
-            select(Category).where(Category.name == "Concurrent Test Category")
-        )
+        db_session.scalars(select(Category).where(Category.name == "Concurrent Test Category"))
     )
     assert len(all_matching) == 1

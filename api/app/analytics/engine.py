@@ -65,8 +65,10 @@ class AnalyticsEngine:
         # ZeroDivisionError/IndexError deep in a module.
         if "months" in params:
             months = params["months"]
-            if not isinstance(months, int) or isinstance(months, bool) or not (
-                _MIN_MONTHS <= months <= _MAX_MONTHS
+            if (
+                not isinstance(months, int)
+                or isinstance(months, bool)
+                or not (_MIN_MONTHS <= months <= _MAX_MONTHS)
             ):
                 raise ValidationError(
                     f"months must be an integer between {_MIN_MONTHS} and {_MAX_MONTHS}, "

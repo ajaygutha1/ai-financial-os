@@ -100,9 +100,7 @@ def test_advisory_lock_serializes_concurrent_latest_hash_reads(engine: Engine) -
     def _hold_lock() -> None:
         conn = engine.connect()
         conn.execute(text("BEGIN"))
-        conn.execute(
-            text("SELECT pg_advisory_xact_lock(:key)"), {"key": _AUDIT_LOG_CHAIN_LOCK_KEY}
-        )
+        conn.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _AUDIT_LOG_CHAIN_LOCK_KEY})
         lock_acquired.set()
         release_lock.wait(timeout=5)
         conn.execute(text("COMMIT"))
@@ -111,9 +109,7 @@ def test_advisory_lock_serializes_concurrent_latest_hash_reads(engine: Engine) -
     def _contend_for_lock() -> None:
         conn = engine.connect()
         conn.execute(text("BEGIN"))
-        conn.execute(
-            text("SELECT pg_advisory_xact_lock(:key)"), {"key": _AUDIT_LOG_CHAIN_LOCK_KEY}
-        )
+        conn.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _AUDIT_LOG_CHAIN_LOCK_KEY})
         second_lock_acquired.set()
         conn.execute(text("COMMIT"))
         conn.close()
@@ -137,9 +133,7 @@ def test_advisory_lock_serializes_concurrent_latest_hash_reads(engine: Engine) -
     assert second_lock_acquired.is_set()
 
 
-def test_concurrent_record_calls_do_not_fork_the_chain(
-    db_session: Session, engine: Engine
-) -> None:
+def test_concurrent_record_calls_do_not_fork_the_chain(db_session: Session, engine: Engine) -> None:
     # Seed one row on the shared session/connection so both threads below
     # start from the same known prev_hash and the race is exercised on the
     # second append, not the first (genesis) one.

@@ -39,9 +39,7 @@ def test_run_raises_on_unknown_metric(db_session: Session, test_user: User) -> N
 
 
 @pytest.mark.parametrize("months", [0, -1, 25, 1000])
-def test_run_rejects_out_of_range_months(
-    db_session: Session, test_user: User, months: int
-) -> None:
+def test_run_rejects_out_of_range_months(db_session: Session, test_user: User, months: int) -> None:
     # The AI tool-calling path (app/ai/tools/analytics_tools.py) calls
     # engine.run() directly, bypassing the router's Query(ge=1, le=24) --
     # this is the only remaining validation for a model-supplied months
