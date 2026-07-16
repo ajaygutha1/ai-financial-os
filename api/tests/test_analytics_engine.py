@@ -18,6 +18,7 @@ def test_available_metrics_lists_all_modules(db_session: Session) -> None:
         "debt_payoff",
         "emergency_fund",
         "expense_trends",
+        "forecast",
         "net_worth",
         "ratios",
         "retirement_contributions",

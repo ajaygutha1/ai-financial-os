@@ -174,3 +174,16 @@ class BudgetVsActualResponse(BaseModel):
     categories: list[BudgetCategoryActual]
     month: date
     methodology: str
+
+
+class ForecastMonth(BaseModel):
+    month: date
+    projected_net_worth: Decimal
+
+
+class ForecastResponse(BaseModel):
+    current_net_worth: Decimal
+    average_monthly_net: Decimal
+    months_considered: int
+    projected_months: list[ForecastMonth]
+    methodology: str

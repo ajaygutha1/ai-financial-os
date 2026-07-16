@@ -13,6 +13,7 @@ from app.analytics.modules import (
     debt_payoff,
     emergency_fund,
     expense_trends,
+    forecast,
     net_worth,
     ratios,
     retirement_contributions,
@@ -41,6 +42,7 @@ _REGISTRY: dict[str, ComputeFn] = {
     "taxable_events": taxable_events.compute,
     "anomaly_detection": anomaly_detection.compute,
     "budget_vs_actual": budget_vs_actual.compute,
+    "forecast": forecast.compute,
 }
 
 

@@ -9,6 +9,7 @@ from app.analytics.modules import (
     debt_payoff,
     emergency_fund,
     expense_trends,
+    forecast,
     net_worth,
     ratios,
     retirement_contributions,
@@ -27,6 +28,7 @@ from app.schemas.analytics import (
     DebtPayoffResponse,
     EmergencyFundResponse,
     ExpenseTrendsResponse,
+    ForecastResponse,
     NetWorthResponse,
     RatiosResponse,
     RetirementContributionsResponse,
@@ -149,3 +151,12 @@ def get_budget_vs_actual(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> BudgetVsActualResponse:
     return budget_vs_actual.compute(db, current_user.id)
+
+
+@router.get("/forecast", response_model=ForecastResponse)
+def get_forecast(
+    months: int = Query(default=forecast.DEFAULT_MONTHS, ge=1, le=24),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ForecastResponse:
+    return forecast.compute(db, current_user.id, months=months)

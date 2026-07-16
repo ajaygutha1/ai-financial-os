@@ -12,6 +12,7 @@ from app.analytics.modules import (
     debt_payoff,
     emergency_fund,
     expense_trends,
+    forecast,
     ratios,
     retirement_contributions,
     savings_rate,
@@ -121,6 +122,13 @@ _TOOL_SPECS: list[tuple[str, str, dict[str, Any]]] = [
         "This user's actual spend so far this calendar month vs. the monthly budget target "
         "they've set, per category. Empty if they haven't set any budget targets.",
         _NO_PARAMS_SCHEMA,
+    ),
+    (
+        "forecast",
+        "Naive straight-line net-worth projection for the next 6 months, based on the "
+        "trailing window's average monthly net cash flow. Not a real forecast model -- "
+        "doesn't account for one-off events or behavior changes.",
+        _months_schema(forecast.DEFAULT_MONTHS),
     ),
 ]
 
