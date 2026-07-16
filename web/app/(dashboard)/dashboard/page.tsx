@@ -1,24 +1,22 @@
 "use client";
 
-import { Banknote, Landmark, PiggyBank } from "lucide-react";
-
 import { CreateAccountDialog } from "@/components/accounts/create-account-dialog";
 import { AIInsightsCard } from "@/components/dashboard/ai-insights-card";
+import { AllocationTile } from "@/components/dashboard/allocation-tile";
+import { BudgetCard } from "@/components/dashboard/budget-card";
 import { CashFlowChart } from "@/components/dashboard/cash-flow-chart";
 import { DebtPayoffCard } from "@/components/dashboard/debt-payoff-card";
 import { EmergencyFundTile } from "@/components/dashboard/emergency-fund-tile";
 import { ExpenseTrendsCard } from "@/components/dashboard/expense-trends-card";
 import { FinancialRatiosTile } from "@/components/dashboard/financial-ratios-tile";
+import { ForecastChart } from "@/components/dashboard/forecast-chart";
+import { GoalsCard } from "@/components/dashboard/goals-card";
 import { NetWorthTile } from "@/components/dashboard/net-worth-tile";
 import { SubscriptionsCard } from "@/components/dashboard/subscriptions-card";
+import { UpcomingBillsCard } from "@/components/dashboard/upcoming-bills-card";
 import { ImportCsvDialog } from "@/components/transactions/import-csv-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/hooks/use-auth";
-
-const ROADMAP = [
-  { title: "Investments", icon: Landmark },
-  { title: "Budget tracking", icon: PiggyBank },
-];
 
 function greeting(): string {
   const hour = new Date().getHours();
@@ -80,25 +78,16 @@ export default function DashboardPage() {
         <AIInsightsCard />
       </div>
 
-      <section>
-        <div className="mb-3 flex items-center gap-2">
-          <Banknote className="size-4 text-muted-foreground" />
-          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            Coming next
-          </h2>
-        </div>
-        <div className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2">
-          {ROADMAP.map(({ title, icon: Icon }) => (
-            <div
-              key={title}
-              className="flex items-center gap-3 bg-card px-4 py-3.5 text-sm text-muted-foreground"
-            >
-              <Icon className="size-4 shrink-0" />
-              {title}
-            </div>
-          ))}
-        </div>
-      </section>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <AllocationTile />
+        <ForecastChart />
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <GoalsCard />
+        <BudgetCard />
+        <UpcomingBillsCard />
+      </div>
     </div>
   );
 }
