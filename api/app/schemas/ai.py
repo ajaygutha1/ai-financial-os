@@ -16,6 +16,7 @@ class RecommendationItemPublic(BaseModel):
     category: str
     confidence: float
     metrics_used: list[str]
+    sources_used: list[str]
 
 
 class FinancialAdviceResponse(BaseModel):

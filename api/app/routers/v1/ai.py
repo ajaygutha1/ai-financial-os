@@ -6,6 +6,8 @@ from app.ai.agents.financial_advisor import (
     FinancialAdvisorAgent,
     RecommendationItem,
 )
+from app.ai.embeddings.base import EmbeddingProvider
+from app.ai.embeddings.dependency import get_embedding_provider
 from app.ai.provider.base import AIProvider, AIRefusalError
 from app.ai.provider.dependency import get_ai_provider
 from app.core.config import get_settings
@@ -31,6 +33,7 @@ def _to_response(item: RecommendationItem) -> RecommendationItemPublic:
         category=item.category,
         confidence=item.confidence,
         metrics_used=item.metrics_used,
+        sources_used=item.sources_used,
     )
 
 
@@ -40,6 +43,7 @@ def get_financial_advice(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     provider: AIProvider = Depends(get_ai_provider),
+    embeddings: EmbeddingProvider = Depends(get_embedding_provider),
 ) -> FinancialAdviceResponse:
     settings = get_settings()
     if not settings.anthropic_api_key:
@@ -47,7 +51,7 @@ def get_financial_advice(
             "AI features aren't configured yet -- set ANTHROPIC_API_KEY on the server."
         )
 
-    agent = FinancialAdvisorAgent(db, provider)
+    agent = FinancialAdvisorAgent(db, provider, embeddings)
 
     try:
         result = agent.run(user_id=current_user.id, user_message=payload.message)

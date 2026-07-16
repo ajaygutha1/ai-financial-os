@@ -20,6 +20,11 @@ const CATEGORY_LABEL: Record<string, string> = {
   general: "General",
 };
 
+function citationList(citations: Record<string, unknown>, key: string): string[] {
+  const value = citations[key];
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
 export function AIInsightsCard({ className }: { className?: string }) {
   const { data, isPending, isError } = useRecommendations();
   const advice = useFinancialAdvice();
@@ -50,23 +55,37 @@ export function AIInsightsCard({ className }: { className?: string }) {
           <p className="text-sm text-destructive">Couldn&apos;t load recommendations.</p>
         ) : data && data.length > 0 ? (
           <ul className="space-y-4">
-            {data.map((rec) => (
-              <li
-                key={rec.id}
-                className="space-y-1 border-b border-border pb-4 last:border-0 last:pb-0"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium">{rec.title}</span>
-                  <Badge variant="outline">
-                    {CATEGORY_LABEL[rec.category ?? "general"] ?? rec.category}
-                  </Badge>
-                </div>
-                <p className="text-sm text-muted-foreground">{rec.explanation}</p>
-                <p className="text-xs text-muted-foreground">
-                  Confidence: {Math.round(Number.parseFloat(rec.confidence) * 100)}%
-                </p>
-              </li>
-            ))}
+            {data.map((rec) => {
+              const metricsUsed = citationList(rec.citations, "metrics_used");
+              const sourcesUsed = citationList(rec.citations, "sources_used");
+              return (
+                <li
+                  key={rec.id}
+                  className="space-y-1 border-b border-border pb-4 last:border-0 last:pb-0"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium">{rec.title}</span>
+                    <Badge variant="outline">
+                      {CATEGORY_LABEL[rec.category ?? "general"] ?? rec.category}
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-muted-foreground">{rec.explanation}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Confidence: {Math.round(Number.parseFloat(rec.confidence) * 100)}%
+                  </p>
+                  {metricsUsed.length > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      Based on: {metricsUsed.join(", ")}
+                    </p>
+                  )}
+                  {sourcesUsed.length > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      Sources: {sourcesUsed.join(", ")}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         ) : (
           <p className="text-sm text-muted-foreground">

@@ -7,6 +7,8 @@ from app.models.category import Category
 from app.models.connector_credential import ConnectorCredential
 from app.models.domain_event import DomainEventLog
 from app.models.merchant import Merchant
+from app.models.rag_chunk import RAGChunk
+from app.models.rag_document import RAGDocument
 from app.models.sync_job import SyncJob
 from app.models.transaction import Transaction
 from app.models.transaction_provenance import TransactionProvenance
@@ -22,6 +24,8 @@ __all__ = [
     "ConnectorCredential",
     "DomainEventLog",
     "Merchant",
+    "RAGChunk",
+    "RAGDocument",
     "SyncJob",
     "Transaction",
     "TransactionProvenance",

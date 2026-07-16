@@ -1,6 +1,9 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector's official image, not plain postgres:16-alpine (Milestone 5) --
+    # same Postgres 16 underneath, with the vector extension pre-built in so
+    # migration 0004 only needs `CREATE EXTENSION IF NOT EXISTS vector`.
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     env_file: .env
     environment:

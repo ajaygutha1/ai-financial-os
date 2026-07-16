@@ -583,9 +583,148 @@ real token counts recorded.
 real tokens) that invalidates and refetches the list on success. Fills the
 "AI insights" dashboard placeholder from M1/M3.
 
+## Milestone 5 — Detailed Implementation Plan (built and verified)
+
+Goal: give the Financial Advisor a second knowledge source alongside this
+user's own numbers -- general personal-finance guidance (emergency-fund
+sizing, debt payoff strategies, retirement accounts, tax brackets,
+diversification, budgeting frameworks) retrieved via RAG and cited by title,
+the same way `metrics_used` already cites analytics tools.
+
+### Embeddings: local (fastembed), not an API
+
+Chosen over calling out to an embeddings API so the RAG pipeline has no extra
+per-query cost or external dependency once the corpus is ingested. Within
+"local," `fastembed` (ONNX runtime, `BAAI/bge-small-en-v1.5`, 384 dimensions)
+was chosen over `sentence-transformers` specifically to avoid pulling in
+PyTorch for what is otherwise a small, focused embedding task -- `fastembed`'s
+only heavy dependency is `onnxruntime`. Same adapter shape as `AIProvider`:
+`EmbeddingProvider` ABC (`embed()`, `dimensions`) with `FastEmbedProvider`
+(real) and `FakeEmbeddingProvider` (test double). The fake isn't a text hash
+-- it's a deterministic hashing-trick bag-of-words, so texts sharing
+vocabulary land closer together in cosine distance than unrelated texts,
+which matters for retrieval-ranking tests to be meaningful rather than
+vacuous.
+
+### Corpus: small, hand-authored, explicitly not scraped
+
+Six short markdown documents (`docs/rag-corpus/`) written for this project
+rather than pulled from IRS/SEC/Investopedia, since scraping real regulatory
+sources raises sourcing/licensing questions this milestone didn't need to
+take on to prove the pipeline. `docs/rag-corpus/README.md` documents this
+choice and how to swap in real sourced documents later via the existing
+`source`/`source_url` fields. The tax-brackets document carries an explicit,
+deliberate disclaimer that its figures are illustrative examples, not
+current-year-authoritative -- a financial app asserting stale tax law as fact
+is a real risk, not a hypothetical one.
+
+### Database (migration `0004`)
+
+- **pgvector extension** (`CREATE EXTENSION IF NOT EXISTS vector`), and the
+  `postgres` Compose service image changed from `postgres:16-alpine` to
+  `pgvector/pgvector:pg16` -- same Postgres 16 data format underneath, so the
+  existing named volume survives the swap unmodified.
+- **rag_document**: `title`, `source`, `category`, `source_url`,
+  `content_hash` (unique -- backs idempotent re-ingestion).
+- **rag_chunk**: `document_id` (FK, cascade delete), `chunk_index`, `content`,
+  `embedding` (`vector(384)`), `token_count`. Two indexes carry the actual
+  retrieval load: an HNSW index (`vector_cosine_ops`, m=16, ef_construction=64)
+  for vector search, and a GIN index over `to_tsvector('english', content)`
+  for full-text search.
+
+### Chunking
+
+`chunk_markdown()` splits by `##` heading first (each chunk prefixed with
+`{title} — {heading}` so it stays meaningful once separated from the rest of
+the document), then applies a 300-word sliding window with 50-word overlap to
+any section still too long. Token counts are an approximate `len//4`
+heuristic for observability only, never used for a billing or context-limit
+decision.
+
+### Ingestion: idempotent by content hash
+
+`RAGIngestionService.ingest_directory()` hashes each file's content; an
+unchanged document is skipped entirely, a changed document (same title,
+different hash) has its old chunks deleted and replaced wholesale rather than
+diffed chunk-by-chunk -- the corpus is small enough that re-embedding a whole
+document is cheap and much simpler than a diff. Verified idempotent against
+the real dev DB: first run ingested all 6 documents (29 chunks), a second run
+against unchanged files skipped all 6.
+
+### Hybrid retrieval: Reciprocal Rank Fusion, not score blending
+
+`HybridRetriever` runs both pgvector cosine-distance search and Postgres
+full-text search, then fuses results with Reciprocal Rank Fusion (`1 / (60 +
+rank + 1)`, standard RRF-paper default) rather than trying to normalize and
+blend cosine distance against `ts_rank` directly -- the two scores aren't on
+comparable scales, but rank position always is. Category filtering is applied
+after fusion. Manually verified against the real ingested corpus with several
+queries before wiring it into the agent, to catch retrieval-quality issues
+independent of any agent-loop bug.
+
+### Agent integration
+
+`search_knowledge_base` is a new strict-schema tool (`build_rag_tool`)
+alongside the M4 analytics tools; the system prompt tells the model to use it
+for general-principle questions (an emergency-fund target, avalanche vs.
+snowball) rather than this user's own numbers, which the analytics tools
+already cover. `RecommendationItem` gained a `sources_used: list[str]` field,
+parallel to `metrics_used`, populated with the document titles the model
+actually leaned on -- left empty when a recommendation is purely numbers-based.
+`FinancialAdvisorAgent` now takes an `EmbeddingProvider` alongside the
+`AIProvider`, threaded through the same FastAPI DI seam
+(`get_embedding_provider`, overridden with `FakeEmbeddingProvider` in tests).
+
+### Live verification (real Anthropic API) surfaced two real bugs
+
+- **Same class of bug as M4, different tool.** The auto-generated
+  `submit_recommendations` schema (`FinancialAdviceResult.model_json_schema()`)
+  emits `minimum`/`maximum` for `confidence: float = Field(ge=0.0, le=1.0)` --
+  valid JSON Schema, but Anthropic tool schemas reject it for `number` types
+  the same way M4 found for `integer` types. Fixed by recursively stripping
+  `minimum`/`maximum` from the generated schema before using it as
+  `input_schema` (the 0-1 bound still applies at `model_validate()` time; the
+  valid range is now stated in the tool description instead).
+- **A genuine, reproducible model failure mode, not a schema bug.** With that
+  fix in place, asking for multiple long recommendations in one turn (e.g.
+  both an emergency-fund target and an avalanche-vs-snowball comparison)
+  reliably produced a `submit_recommendations` call with `recommendations: []`
+  while the real recommendation content was dumped as raw text inside
+  `reasoning_summary`, wrapped in fake `<parameter name="...">` tags
+  resembling a different tool-calling convention entirely. This passes schema
+  validation (a string can contain anything; an empty array is a valid
+  array), so it can only be caught by content inspection, not the schema.
+  Reproduced twice with the same prompt; a simple single-recommendation
+  prompt never triggered it, confirming it's specific to long, multi-item
+  submissions. Fixed by detecting the `<parameter` marker in
+  `reasoning_summary` post-validation and treating it as a failed submission
+  -- the agent sends a corrective `tool_result` explaining exactly what was
+  wrong and retries (consuming one iteration of the existing budget) rather
+  than silently returning the malformed result to the user. Re-verified live
+  with the same prompt that reproduced it: correct, well-cited, 3-recommendation
+  output on the first attempt after the fix.
+
+### Frontend
+
+`AIInsightsCard` now reads both `citations.metrics_used` and
+`citations.sources_used` off each `AIRecommendation` and renders them as
+separate "Based on: ..." / "Sources: ..." lines when non-empty -- the
+citation data existed in M4 but wasn't surfaced in the UI at all until now.
+
+### Testing
+
+17 new tests (140 total): chunker unit tests (heading split, no-heading
+fallback, sliding-window overlap, token-count monotonicity), retrieval tests
+against a real pgvector-backed test database with `FakeEmbeddingProvider`
+(keyword+vector fusion surfaces the right document, category filtering,
+top-k limiting), and agent-level tests with `FakeAIProvider` proving the
+agent calls `search_knowledge_base` and records `sources_used` correctly, and
+that a scripted malformed submission (the exact failure shape hit live) is
+caught and retried rather than accepted.
+
 ## After approval
 
-M1 through M4 are all built and verified end-to-end (113 tests passing,
+M1 through M5 are all built and verified end-to-end (140 tests passing,
 mypy --strict and ruff clean, full Docker Compose stack, and the dashboard
 manually driven end-to-end in a real browser against realistic demo data). A
 few specifics were refined during hands-on M2 implementation versus the
@@ -596,5 +735,5 @@ same response shape; the audit-log immutability trigger also covers
 doesn't catch); and four DB-backed pipeline lookups (dedup, merchant
 resolution, transfer/refund matching) were bundled into a single
 `PipelineDependencies` object rather than four growing callback parameters.
-Milestone 5 (the RAG pipeline: pgvector, hybrid retrieval, IRS/SEC/
-Investopedia corpus, citations wired into the Financial Advisor) is next.
+Milestone 6 (remaining agents reusing the M4/M5 tool-calling and RAG pattern)
+is next.

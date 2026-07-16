@@ -1,6 +1,8 @@
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.ai.embeddings.dependency import get_embedding_provider
+from app.ai.embeddings.fake_provider import FakeEmbeddingProvider
 from app.ai.provider.base import RawModelResult, ToolUseCall, UsageInfo
 from app.ai.provider.dependency import get_ai_provider
 from app.ai.provider.fake_provider import FakeAIProvider
@@ -19,6 +21,7 @@ def _submit_only_script() -> list[RawModelResult]:
                 "category": "general",
                 "confidence": 0.5,
                 "metrics_used": [],
+                "sources_used": [],
             }
         ],
     }
@@ -51,6 +54,7 @@ def test_advice_endpoint_returns_recommendations(
 ) -> None:
     fake_provider = FakeAIProvider(db_session, _submit_only_script())
     fastapi_app.dependency_overrides[get_ai_provider] = lambda: fake_provider
+    fastapi_app.dependency_overrides[get_embedding_provider] = lambda: FakeEmbeddingProvider()
 
     response = client.post(
         "/api/v1/ai/financial-advisor/advice",
@@ -68,6 +72,7 @@ def test_list_recommendations_endpoint(
 ) -> None:
     fake_provider = FakeAIProvider(db_session, _submit_only_script())
     fastapi_app.dependency_overrides[get_ai_provider] = lambda: fake_provider
+    fastapi_app.dependency_overrides[get_embedding_provider] = lambda: FakeEmbeddingProvider()
     client.post("/api/v1/ai/financial-advisor/advice", json={}, headers=auth_headers)
 
     response = client.get("/api/v1/ai/recommendations", headers=auth_headers)

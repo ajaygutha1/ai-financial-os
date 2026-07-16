@@ -169,6 +169,7 @@ export interface RecommendationItem {
   category: string;
   confidence: number;
   metrics_used: string[];
+  sources_used: string[];
 }
 
 export interface FinancialAdviceResponse {

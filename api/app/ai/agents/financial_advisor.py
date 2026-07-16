@@ -6,8 +6,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from app.ai.embeddings.base import EmbeddingProvider
 from app.ai.provider.base import AICallMetadata, AIProvider, ToolDefinition
 from app.ai.tools.analytics_tools import build_analytics_tools
+from app.ai.tools.rag_tools import build_rag_tool
 from app.core.config import get_settings
 from app.repositories.agent_run_repository import AgentRunRepository
 from app.repositories.ai_recommendation_repository import AIRecommendationRepository
@@ -24,18 +26,27 @@ Rules:
 accounts and transactions. Call the relevant ones before making any claim \
 about their finances -- never invent or estimate a number a tool could give \
 you exactly.
+- You also have a `search_knowledge_base` tool with general financial \
+guidance (emergency fund targets, debt payoff strategies, retirement \
+account tradeoffs, how tax brackets work, diversification, budgeting \
+frameworks). Use it when a recommendation rests on a general principle, not \
+just this user's numbers -- e.g. before asserting an emergency-fund target \
+or comparing payoff strategies, check what the reference guidance actually \
+says rather than relying on your own unstated assumptions.
 - If a tool's result reflects insufficient data (e.g. no transaction \
 history, a null value), say so plainly in your reasoning rather than \
 guessing what the number might be.
 - When you have gathered enough information, call `submit_recommendations` \
 exactly once with your final structured answer. Do not call it \
-speculatively before checking the metrics it depends on, and do not call \
-any tool after it.
+speculatively before checking the metrics and guidance it depends on, and \
+do not call any tool after it.
 - Each recommendation must name exactly which metrics/tools it's based on \
-(the `metrics_used` field), and a confidence score (0-1) reflecting how \
-much data actually supports it -- a recommendation based on six months of \
-consistent data should read as more confident than one based on a single \
-thin data point.
+(the `metrics_used` field), which knowledge-base sources support it if any \
+were used (the `sources_used` field -- leave it empty if the recommendation \
+is purely about this user's own numbers), and a confidence score (0-1) \
+reflecting how much data actually supports it -- a recommendation based on \
+six months of consistent data should read as more confident than one based \
+on a single thin data point.
 - Prefer a small number of concrete, actionable recommendations over a long \
 generic list."""
 
@@ -52,6 +63,7 @@ class RecommendationItem(BaseModel):
     # model_validate() instead of overflowing the Numeric(3,2) DB column.
     confidence: float = Field(ge=0.0, le=1.0)
     metrics_used: list[str]
+    sources_used: list[str]
 
 
 class FinancialAdviceResult(BaseModel):
@@ -67,22 +79,63 @@ class AgentIncompleteError(Exception):
     than fabricating a response."""
 
 
+# Observed live against the real API (not a hypothetical): under long,
+# multi-recommendation submissions the model has, more than once, dumped its
+# actual recommendations as raw text inside `reasoning_summary` -- wrapped in
+# fake `<parameter name="...">` tags resembling a different tool-call
+# convention -- while leaving the real `recommendations` array empty. This
+# still passes schema validation (a string can contain anything, an empty
+# list is a valid list), so it has to be caught as a content check, not a
+# schema check.
+_MALFORMED_SUBMISSION_MARKER = "<parameter"
+
+
+def _is_malformed_submission(result: FinancialAdviceResult) -> bool:
+    return _MALFORMED_SUBMISSION_MARKER in result.reasoning_summary
+
+
+def _strip_unsupported_constraints(schema: dict[str, Any]) -> dict[str, Any]:
+    """Anthropic tool schemas reject `minimum`/`maximum` on numeric
+    properties (same limitation as analytics_tools.py's months param), but
+    pydantic's model_json_schema() emits them for confidence: float =
+    Field(ge=0.0, le=1.0). Strip them recursively -- the 0-1 bound is still
+    enforced at FinancialAdviceResult.model_validate() time, just not
+    expressible in the tool's JSON schema."""
+    result: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key in ("minimum", "maximum"):
+            continue
+        if isinstance(value, dict):
+            result[key] = _strip_unsupported_constraints(value)
+        elif isinstance(value, list):
+            result[key] = [
+                _strip_unsupported_constraints(item) if isinstance(item, dict) else item
+                for item in value
+            ]
+        else:
+            result[key] = value
+    return result
+
+
 def _submit_tool() -> ToolDefinition:
+    schema = _strip_unsupported_constraints(FinancialAdviceResult.model_json_schema())
     return ToolDefinition(
         name="submit_recommendations",
         description=(
             "Call this exactly once, when you are done analyzing, to submit your "
-            "final structured financial advice. Do not call any other tool after this."
+            "final structured financial advice. Do not call any other tool after this. "
+            "`confidence` must be between 0 and 1 (inclusive)."
         ),
-        input_schema=FinancialAdviceResult.model_json_schema(),
+        input_schema=schema,
         handler=lambda tool_input: tool_input,  # terminal tool; the loop intercepts it directly
     )
 
 
 class FinancialAdvisorAgent:
-    def __init__(self, db: Session, provider: AIProvider) -> None:
+    def __init__(self, db: Session, provider: AIProvider, embeddings: EmbeddingProvider) -> None:
         self.db = db
         self.provider = provider
+        self.embeddings = embeddings
         self.agent_runs = AgentRunRepository(db)
         self.recommendations = AIRecommendationRepository(db)
 
@@ -122,6 +175,7 @@ class FinancialAdvisorAgent:
                     confidence=Decimal(str(round(item.confidence, 2))),
                     citations={
                         "metrics_used": item.metrics_used,
+                        "sources_used": item.sources_used,
                         "reasoning_summary": result.reasoning_summary,
                     },
                     prompt_version=PROMPT_VERSION,
@@ -143,7 +197,11 @@ class FinancialAdvisorAgent:
         user_message: str | None,
         max_iterations: int,
     ) -> FinancialAdviceResult:
-        tools = [*build_analytics_tools(self.db, user_id), _submit_tool()]
+        tools = [
+            *build_analytics_tools(self.db, user_id),
+            build_rag_tool(self.db, self.embeddings),
+            _submit_tool(),
+        ]
         tools_by_name = {t.name: t for t in tools}
 
         opening = user_message or (
@@ -168,7 +226,30 @@ class FinancialAdvisorAgent:
                 (t for t in response.tool_uses if t.name == "submit_recommendations"), None
             )
             if submit_call is not None:
-                return FinancialAdviceResult.model_validate(submit_call.input)
+                result = FinancialAdviceResult.model_validate(submit_call.input)
+                if _is_malformed_submission(result):
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": submit_call.id,
+                                    "content": (
+                                        "That submission was malformed: `recommendations` "
+                                        "was empty and `reasoning_summary` contained raw "
+                                        "tool-call syntax instead of prose. Resubmit "
+                                        "submit_recommendations with each recommendation as "
+                                        "its own object in the `recommendations` array, and "
+                                        "keep `reasoning_summary` to a short prose summary."
+                                    ),
+                                    "is_error": True,
+                                }
+                            ],
+                        }
+                    )
+                    continue
+                return result
 
             if not response.tool_uses:
                 # Model stopped without submitting -- nudge once rather than
