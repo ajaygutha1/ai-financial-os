@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { LayoutDashboard, ListOrdered, LogOut } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
+import { useLiveUpdates } from "@/hooks/use-live-updates";
 import { LogoMark, Wordmark } from "@/components/brand/logo-mark";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -36,6 +37,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const { user, status, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
+
+  useLiveUpdates(status === "authenticated");
 
   useEffect(() => {
     if (status === "unauthenticated") {

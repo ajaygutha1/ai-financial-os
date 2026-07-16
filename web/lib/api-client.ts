@@ -1,6 +1,6 @@
 import type { TokenResponse } from "@/types/api";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 // Access tokens live only in memory (never localStorage) to limit XSS blast
 // radius; the refresh token is an httpOnly cookie the browser attaches
