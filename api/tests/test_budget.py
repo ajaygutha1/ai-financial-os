@@ -1,14 +1,19 @@
+import threading
 import uuid
 from datetime import date
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.account import Account
+from app.models.budget_target import BudgetTarget
 from app.models.category import Category
 from app.models.transaction import Transaction
 from app.models.user import User
+from app.repositories.budget_target_repository import BudgetTargetRepository
 
 
 def _category(db_session: Session, name: str = "Groceries") -> Category:
@@ -67,6 +72,58 @@ def test_setting_a_target_twice_upserts_not_duplicates(
     listed = client.get("/api/v1/budget/targets", headers=auth_headers).json()
     assert len(listed) == 1
     assert listed[0]["monthly_target_amount"] == "500.0000"
+
+
+def test_concurrent_upsert_for_new_category_does_not_raise_integrity_error(
+    db_session: Session, engine: Engine, test_user: User
+) -> None:
+    # Regression: two concurrent upserts for a category with no existing
+    # target (e.g. a double-submit) both miss the SELECT and race to
+    # INSERT -- ux_budget_targets_user_category then raises an uncaught
+    # IntegrityError for whichever loses the race. Both callers' intended
+    # amount must still win through to the final row (upsert semantics),
+    # not just whichever happened to insert first.
+    category = _category(db_session)
+    category_id = category.id
+    user_id = test_user.id
+
+    session_factory = sessionmaker(bind=engine)
+    barrier = threading.Barrier(2)
+    errors: list[Exception] = []
+
+    def _upsert(amount: str) -> None:
+        session = session_factory()
+        try:
+            barrier.wait(timeout=5)
+            BudgetTargetRepository(session).upsert(
+                user_id=user_id, category_id=category_id, monthly_target_amount=Decimal(amount)
+            )
+            session.commit()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+        finally:
+            session.close()
+
+    threads = [
+        threading.Thread(target=_upsert, args=("400.00",)),
+        threading.Thread(target=_upsert, args=("500.00",)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors, f"concurrent upsert() calls raised: {errors}"
+
+    rows = list(
+        db_session.scalars(
+            select(BudgetTarget).where(
+                BudgetTarget.user_id == user_id, BudgetTarget.category_id == category_id
+            )
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0].monthly_target_amount in (Decimal("400.00"), Decimal("500.00"))
 
 
 def test_set_budget_target_with_nonexistent_category_is_rejected(

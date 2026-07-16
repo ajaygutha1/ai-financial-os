@@ -2,6 +2,7 @@ import uuid
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.budget_target import BudgetTarget
@@ -41,11 +42,27 @@ class BudgetTargetRepository:
             self.db.flush()
             return existing
 
+        # ux_budget_targets_user_category means two concurrent upserts for a
+        # category with no target yet (e.g. a double-submit) can both miss
+        # the SELECT above and race to INSERT. A SAVEPOINT contains the
+        # resulting IntegrityError to just this attempt; on conflict, fall
+        # back to *updating* the row the other writer just committed to this
+        # call's amount, rather than discarding it -- upsert's contract is
+        # "set the target to this value," not "create only if missing."
         target = BudgetTarget(
             user_id=user_id, category_id=category_id, monthly_target_amount=monthly_target_amount
         )
-        self.db.add(target)
-        self.db.flush()
+        try:
+            with self.db.begin_nested():
+                self.db.add(target)
+                self.db.flush()
+        except IntegrityError:
+            existing = self.get_by_category(user_id, category_id)
+            if existing is None:
+                raise
+            existing.monthly_target_amount = monthly_target_amount
+            self.db.flush()
+            return existing
         return target
 
     def delete(self, target: BudgetTarget) -> None:
