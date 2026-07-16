@@ -21,7 +21,11 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        # pgvector-enabled image, required since migration 0004 (RAG
+        # knowledge base) runs `CREATE EXTENSION vector` -- plain
+        # postgres:16-alpine doesn't ship that extension and `alembic
+        # upgrade head` fails on it. Matches docker-compose.yml's image.
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: finos
           POSTGRES_PASSWORD: finos_dev_password
