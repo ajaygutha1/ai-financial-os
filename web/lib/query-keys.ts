@@ -16,4 +16,5 @@ export const queryKeys = {
   categories: ["categories"] as const,
   budgetTargets: ["budget", "targets"] as const,
   budgetVsActual: ["analytics", "budget-vs-actual"] as const,
+  forecast: (months: number) => ["analytics", "forecast", months] as const,
 };

@@ -229,3 +229,16 @@ export interface BudgetVsActualResponse {
   month: string;
   methodology: string;
 }
+
+export interface ForecastMonth {
+  month: string;
+  projected_net_worth: string;
+}
+
+export interface ForecastResponse {
+  current_net_worth: string;
+  average_monthly_net: string;
+  months_considered: number;
+  projected_months: ForecastMonth[];
+  methodology: string;
+}
