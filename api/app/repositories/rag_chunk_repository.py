@@ -4,6 +4,7 @@ from sqlalchemy import Float, delete, func, select, text
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.rag_chunk import RAGChunk
+from app.models.rag_document import RAGDocument
 
 
 class RAGChunkRepository:
@@ -19,30 +20,44 @@ class RAGChunkRepository:
         self.db.flush()
 
     def vector_search(
-        self, query_embedding: list[float], *, limit: int
+        self, query_embedding: list[float], *, limit: int, category: str | None = None
     ) -> list[tuple[RAGChunk, float]]:
         """Nearest chunks by cosine distance (0 = identical, 2 = opposite)
-        -- lower is more similar."""
+        -- lower is more similar. `category`, when given, is applied here
+        (before the LIMIT), not by the caller after fetching -- otherwise a
+        category-scoped query silently returns fewer than `limit` (or zero)
+        candidates whenever matching chunks don't happen to rank in the
+        corpus-wide top N, even though matching content exists."""
         distance = RAGChunk.embedding.cosine_distance(query_embedding).label("distance")
         stmt = (
             select(RAGChunk, distance)
+            .join(RAGChunk.document)
             .options(joinedload(RAGChunk.document))
             .order_by(distance)
             .limit(limit)
         )
+        if category is not None:
+            stmt = stmt.where(RAGDocument.category == category)
         return [(chunk, dist) for chunk, dist in self.db.execute(stmt).all()]
 
-    def keyword_search(self, query: str, *, limit: int) -> list[tuple[RAGChunk, float]]:
+    def keyword_search(
+        self, query: str, *, limit: int, category: str | None = None
+    ) -> list[tuple[RAGChunk, float]]:
         """Nearest chunks by Postgres full-text search rank -- higher is
-        more relevant (opposite direction from vector_search's distance)."""
+        more relevant (opposite direction from vector_search's distance).
+        See vector_search's docstring for why `category` is filtered here,
+        pre-LIMIT, rather than by the caller."""
         tsquery = func.plainto_tsquery("english", query)
         tsvector = func.to_tsvector("english", RAGChunk.content)
         rank = func.ts_rank(tsvector, tsquery).cast(Float).label("rank")
         stmt = (
             select(RAGChunk, rank)
+            .join(RAGChunk.document)
             .options(joinedload(RAGChunk.document))
             .where(tsvector.op("@@")(tsquery))
             .order_by(text("rank DESC"))
             .limit(limit)
         )
+        if category is not None:
+            stmt = stmt.where(RAGDocument.category == category)
         return [(chunk, rank_value) for chunk, rank_value in self.db.execute(stmt).all()]

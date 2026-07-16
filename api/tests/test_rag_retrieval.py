@@ -76,6 +76,39 @@ def test_category_filter_excludes_non_matching_documents(db_session: Session) ->
     assert all(r.document_title == "Emergency Fund Guidelines" for r in results)
 
 
+def test_category_filter_finds_a_match_outside_the_corpus_wide_top_candidates(
+    db_session: Session,
+) -> None:
+    # Regression: category filtering used to happen *after* fusing the
+    # corpus-wide top-20-per-leg pull, so a real match in the requested
+    # category that doesn't rank in that top 20 (because a different
+    # category dominates the corpus for this query) was silently dropped --
+    # not just deprioritized, excluded entirely, even though it's the only
+    # document in the requested category. Seed enough same-vocabulary decoys
+    # in a different category to push the real match past the top-20 cutoff
+    # in both the vector and keyword legs.
+    query = "emergency fund months expenses coverage"
+    for i in range(25):
+        _seed_document(
+            db_session,
+            title=f"Budgeting Decoy {i}",
+            category="budgeting",
+            content=query,
+        )
+    _seed_document(
+        db_session,
+        title="Emergency Fund Guidelines",
+        category="emergency_fund",
+        content="keep three months of essential spending saved for surprises",
+    )
+
+    retriever = HybridRetriever(db_session, _EMBEDDINGS)
+    results = retriever.search(query, top_k=5, category="emergency_fund")
+
+    assert len(results) == 1
+    assert results[0].document_title == "Emergency Fund Guidelines"
+
+
 def test_top_k_limits_the_number_of_results(db_session: Session) -> None:
     for i in range(8):
         _seed_document(
