@@ -170,6 +170,91 @@ def test_flags_new_merchant_large_amount(
     assert flags[0]["merchant"] == "suspicious-co"
 
 
+def test_duplicate_charges_do_not_mask_a_genuine_category_outlier(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    db_session: Session,
+    test_user: User,
+    test_account: Account,
+) -> None:
+    # Regression: a large duplicate-flagged pair used to still count toward
+    # the category baseline that unusual_amount_for_category compares
+    # against, inflating the average enough to hide a real outlier. Without
+    # the fix: baseline includes the $200/$200 duplicates -> leave-one-out
+    # average for the $180 charge is (680-180)/7 ~= $71.43, so $180 is
+    # *below* the 3x threshold (~$214) and goes unflagged. With the fix, the
+    # duplicates are excluded first -> average is (280-180)/5 = $20, and
+    # $180 (9x) clears the threshold.
+    today = date.today()
+    rows = [
+        _charge(
+            test_user.id,
+            test_account.id,
+            today - timedelta(days=10 + i),
+            "-20.00",
+            merchant=f"cafe-{i}",
+            category="Dining",
+        )
+        for i in range(4)
+    ]
+    # A repeat merchant (so the outlier below can't be caught by the
+    # new_merchant_large_amount check instead -- isolating the category
+    # baseline specifically).
+    rows.append(
+        _charge(
+            test_user.id,
+            test_account.id,
+            today - timedelta(days=20),
+            "-20.00",
+            merchant="regular-diner",
+            category="Dining",
+        )
+    )
+    rows.append(
+        _charge(
+            test_user.id,
+            test_account.id,
+            today,
+            "-180.00",
+            merchant="regular-diner",
+            category="Dining",
+        )
+    )
+    # The duplicate pair that must not pollute the baseline above.
+    rows.append(
+        _charge(
+            test_user.id,
+            test_account.id,
+            today - timedelta(days=5),
+            "-200.00",
+            merchant="big-dup",
+            category="Dining",
+        )
+    )
+    rows.append(
+        _charge(
+            test_user.id,
+            test_account.id,
+            today - timedelta(days=4),
+            "-200.00",
+            merchant="big-dup",
+            category="Dining",
+        )
+    )
+    db_session.add_all(rows)
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/analytics/anomaly-detection", params={"months": 2}, headers=auth_headers
+    )
+
+    assert response.status_code == 200
+    flags = response.json()["flags"]
+    reasons_by_merchant = {f["merchant"]: f["reason"] for f in flags}
+    assert reasons_by_merchant["big-dup"] == "possible_duplicate_charge"
+    assert reasons_by_merchant["regular-diner"] == "unusual_amount_for_category"
+
+
 def test_excludes_transfers_and_duplicates_from_scan(
     client: TestClient,
     auth_headers: dict[str, str],

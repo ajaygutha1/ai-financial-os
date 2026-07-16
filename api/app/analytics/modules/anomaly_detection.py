@@ -118,6 +118,18 @@ def compute(
                     )
                     flagged_ids.add(txn.id)
 
+    # Duplicate-flagged transactions must not inflate the baselines the
+    # other two checks compare against -- otherwise a large duplicate charge
+    # drags the category/user average up enough to hide a genuinely unusual
+    # charge that would otherwise have cleared the 3x/2x threshold.
+    for flagged_id in flagged_ids:
+        flagged_expense = expense_by_txn[flagged_id]
+        flagged_label = category_by_txn[flagged_id]
+        category_sum[flagged_label] -= flagged_expense
+        category_count[flagged_label] -= 1
+        total_expense -= flagged_expense
+        total_count -= 1
+
     # (2) Unusual amount for category, and (3) new merchant + large amount --
     # evaluated in chronological order so "new" reflects first appearance
     # within the window, not just within the whole set.
