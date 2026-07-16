@@ -27,7 +27,11 @@ _AGENT_CASES: list[tuple[type[BaseAgent], set[str], str]] = [
         {"cash_flow", "expense_trends", "subscriptions", "burn_rate"},
         "spending",
     ),
-    (BudgetCoachAgent, {"cash_flow", "expense_trends", "savings_rate", "ratios"}, "budgeting"),
+    (
+        BudgetCoachAgent,
+        {"cash_flow", "expense_trends", "savings_rate", "ratios", "budget_vs_actual"},
+        "budgeting",
+    ),
     (RetirementPlannerAgent, {"net_worth", "retirement_contributions"}, "retirement"),
     (TaxAdvisorAgent, {"taxable_events"}, "general"),
     (FraudDetectionAgent, {"anomaly_detection"}, "general"),

@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.analytics.modules import (
     anomaly_detection,
+    budget_vs_actual,
     burn_rate,
     cash_flow,
     debt_payoff,
@@ -20,6 +21,7 @@ from app.core.security import get_current_user
 from app.models.user import User
 from app.schemas.analytics import (
     AnomalyDetectionResponse,
+    BudgetVsActualResponse,
     BurnRateResponse,
     CashFlowResponse,
     DebtPayoffResponse,
@@ -140,3 +142,10 @@ def get_anomaly_detection(
     db: Session = Depends(get_db),
 ) -> AnomalyDetectionResponse:
     return anomaly_detection.compute(db, current_user.id, months=months)
+
+
+@router.get("/budget-vs-actual", response_model=BudgetVsActualResponse)
+def get_budget_vs_actual(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> BudgetVsActualResponse:
+    return budget_vs_actual.compute(db, current_user.id)

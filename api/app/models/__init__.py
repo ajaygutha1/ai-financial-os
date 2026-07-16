@@ -3,6 +3,7 @@ from app.models.agent_run import AgentRun
 from app.models.ai_audit_log import AIAuditLog
 from app.models.ai_recommendation import AIRecommendation
 from app.models.audit_log import AuditLog
+from app.models.budget_target import BudgetTarget
 from app.models.category import Category
 from app.models.connector_credential import ConnectorCredential
 from app.models.domain_event import DomainEventLog
@@ -21,6 +22,7 @@ __all__ = [
     "AIAuditLog",
     "AIRecommendation",
     "AuditLog",
+    "BudgetTarget",
     "Category",
     "ConnectorCredential",
     "DomainEventLog",

@@ -159,3 +159,18 @@ class AnomalyDetectionResponse(BaseModel):
     period_start: date
     period_end: date
     methodology: str
+
+
+class BudgetCategoryActual(BaseModel):
+    category_id: UUID
+    category_name: str
+    target_amount: Decimal
+    actual_amount: Decimal
+    remaining: Decimal
+    pct_used: Decimal
+
+
+class BudgetVsActualResponse(BaseModel):
+    categories: list[BudgetCategoryActual]
+    month: date
+    methodology: str

@@ -116,6 +116,12 @@ _TOOL_SPECS: list[tuple[str, str, dict[str, Any]]] = [
         "large charges for their category, and large first-time charges from a new merchant.",
         _months_schema(anomaly_detection.DEFAULT_MONTHS),
     ),
+    (
+        "budget_vs_actual",
+        "This user's actual spend so far this calendar month vs. the monthly budget target "
+        "they've set, per category. Empty if they haven't set any budget targets.",
+        _NO_PARAMS_SCHEMA,
+    ),
 ]
 
 _TOOL_SPECS_BY_NAME = {

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.analytics.modules import (
     anomaly_detection,
+    budget_vs_actual,
     burn_rate,
     cash_flow,
     debt_payoff,
@@ -39,6 +40,7 @@ _REGISTRY: dict[str, ComputeFn] = {
     "retirement_contributions": retirement_contributions.compute,
     "taxable_events": taxable_events.compute,
     "anomaly_detection": anomaly_detection.compute,
+    "budget_vs_actual": budget_vs_actual.compute,
 }
 
 

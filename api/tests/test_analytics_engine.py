@@ -12,6 +12,7 @@ def test_available_metrics_lists_all_modules(db_session: Session) -> None:
 
     assert engine.available_metrics() == [
         "anomaly_detection",
+        "budget_vs_actual",
         "burn_rate",
         "cash_flow",
         "debt_payoff",
