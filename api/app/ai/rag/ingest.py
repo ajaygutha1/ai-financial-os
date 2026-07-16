@@ -70,7 +70,16 @@ class RAGIngestionService:
         title = _extract_title(markdown, fallback=path.stem)
         category = _CATEGORY_BY_FILENAME.get(path.name)
 
-        existing = self.documents.get_by_title(title)
+        # Identity must be the filename, not the title text extracted from
+        # the document's own `# Heading` line -- title is content, and an
+        # ordinary edit (a reword, a typo fix, a case change) changes it.
+        # Keying "is this an update" off title meant such an edit silently
+        # orphaned the old document+chunks instead of replacing them,
+        # breaking the "old chunks replaced" guarantee in
+        # docs/rag-corpus/README.md. The filename is the one thing that
+        # stays stable across a content edit.
+        source_url = path.name
+        existing = self.documents.get_by_source_url(source_url)
         outcome = "updated" if existing is not None else "ingested"
         if existing is not None:
             # Content changed since last ingestion -- replace wholesale
@@ -82,7 +91,7 @@ class RAGIngestionService:
             title=title,
             source=SOURCE_REFERENCE_CORPUS,
             category=category,
-            source_url=None,
+            source_url=source_url,
             content_hash=content_hash,
         )
 

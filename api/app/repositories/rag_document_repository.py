@@ -12,8 +12,8 @@ class RAGDocumentRepository:
         stmt = select(RAGDocument).where(RAGDocument.content_hash == content_hash)
         return self.db.scalar(stmt)
 
-    def get_by_title(self, title: str) -> RAGDocument | None:
-        stmt = select(RAGDocument).where(RAGDocument.title == title)
+    def get_by_source_url(self, source_url: str) -> RAGDocument | None:
+        stmt = select(RAGDocument).where(RAGDocument.source_url == source_url)
         return self.db.scalar(stmt)
 
     def create(
