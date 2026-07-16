@@ -12,4 +12,5 @@ export const queryKeys = {
   debtPayoff: (months: number) => ["analytics", "debt-payoff", months] as const,
   ratios: (months: number) => ["analytics", "ratios", months] as const,
   aiRecommendations: ["ai", "recommendations"] as const,
+  goals: ["goals"] as const,
 };

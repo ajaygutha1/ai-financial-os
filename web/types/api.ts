@@ -188,3 +188,15 @@ export interface AIRecommendation {
   status: string;
   created_at: string;
 }
+
+export interface Goal {
+  id: string;
+  name: string;
+  target_amount: string;
+  target_date: string | null;
+  linked_account_id: string | null;
+  current_amount: string;
+  progress_pct: string;
+  status: string;
+  created_at: string;
+}
