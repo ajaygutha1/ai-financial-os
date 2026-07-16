@@ -32,6 +32,7 @@ _CATEGORY_BY_FILENAME = {
     "tax-brackets-and-marginal-rates.md": "tax",
     "diversification-and-asset-allocation.md": "investing",
     "budgeting-frameworks.md": "budgeting",
+    "fraud-prevention-basics.md": "fraud",
 }
 
 

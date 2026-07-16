@@ -1,11 +1,19 @@
 "use client";
 
+import { useState } from "react";
 import { Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useFinancialAdvice } from "@/hooks/use-financial-advice";
 import { useRecommendations } from "@/hooks/use-recommendations";
@@ -17,8 +25,42 @@ const CATEGORY_LABEL: Record<string, string> = {
   savings: "Savings",
   spending: "Spending",
   subscriptions: "Subscriptions",
+  budgeting: "Budgeting",
+  retirement: "Retirement",
+  capital_gains: "Capital gains",
+  income: "Income",
+  deductions: "Deductions",
+  duplicate_charge: "Duplicate charge",
+  unusual_amount: "Unusual amount",
+  new_merchant: "New merchant",
+  allocation: "Allocation",
+  diversification: "Diversification",
+  concentration: "Concentration",
+  risk: "Risk",
   general: "General",
 };
+
+// slug (URL) -> agent_name (stored on each recommendation) -> display label.
+// A static config array, not a GET /agents call -- the set of agents is
+// fixed at deploy time, not user data worth a network round trip.
+const AGENTS = [
+  { slug: "financial-advisor", agentName: "financial_advisor", label: "Financial Advisor" },
+  { slug: "expense-analyst", agentName: "expense_analyst", label: "Expense Analyst" },
+  { slug: "budget-coach", agentName: "budget_coach", label: "Budget Coach" },
+  { slug: "retirement-planner", agentName: "retirement_planner", label: "Retirement Planner" },
+  { slug: "tax-advisor", agentName: "tax_advisor", label: "Tax Advisor" },
+  { slug: "fraud-detection", agentName: "fraud_detection", label: "Fraud Detection" },
+  { slug: "investment-analyst", agentName: "investment_analyst", label: "Investment Analyst" },
+  {
+    slug: "portfolio-risk-analyst",
+    agentName: "portfolio_risk_analyst",
+    label: "Portfolio Risk Analyst",
+  },
+] as const;
+
+const AGENT_LABEL_BY_NAME: Record<string, string> = Object.fromEntries(
+  AGENTS.map((a) => [a.agentName, a.label])
+);
 
 function citationList(citations: Record<string, unknown>, key: string): string[] {
   const value = citations[key];
@@ -27,13 +69,14 @@ function citationList(citations: Record<string, unknown>, key: string): string[]
 
 export function AIInsightsCard({ className }: { className?: string }) {
   const { data, isPending, isError } = useRecommendations();
-  const advice = useFinancialAdvice();
+  const [agentSlug, setAgentSlug] = useState<string>(AGENTS[0].slug);
+  const advice = useFinancialAdvice(agentSlug);
 
   const handleGetAdvice = () => {
     advice.mutate(undefined, {
       onError: (error) => {
         toast.error(
-          error instanceof ApiError ? error.message : "Couldn't get financial advice."
+          error instanceof ApiError ? error.message : "Couldn't get advice from this agent."
         );
       },
     });
@@ -43,10 +86,24 @@ export function AIInsightsCard({ className }: { className?: string }) {
     <Card className={className}>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <CardTitle className="text-sm font-medium text-muted-foreground">AI insights</CardTitle>
-        <Button size="sm" variant="outline" onClick={handleGetAdvice} disabled={advice.isPending}>
-          <Sparkles className="size-3.5" />
-          {advice.isPending ? "Analyzing..." : "Get advice"}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Select value={agentSlug} onValueChange={(value) => value && setAgentSlug(value)}>
+            <SelectTrigger size="sm" className="w-[170px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {AGENTS.map((agent) => (
+                <SelectItem key={agent.slug} value={agent.slug}>
+                  {agent.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button size="sm" variant="outline" onClick={handleGetAdvice} disabled={advice.isPending}>
+            <Sparkles className="size-3.5" />
+            {advice.isPending ? "Analyzing..." : "Get advice"}
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         {isPending ? (
@@ -69,6 +126,9 @@ export function AIInsightsCard({ className }: { className?: string }) {
                       {CATEGORY_LABEL[rec.category ?? "general"] ?? rec.category}
                     </Badge>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    {AGENT_LABEL_BY_NAME[rec.agent_name] ?? rec.agent_name}
+                  </p>
                   <p className="text-sm text-muted-foreground">{rec.explanation}</p>
                   <p className="text-xs text-muted-foreground">
                     Confidence: {Math.round(Number.parseFloat(rec.confidence) * 100)}%
@@ -89,8 +149,8 @@ export function AIInsightsCard({ className }: { className?: string }) {
           </ul>
         ) : (
           <p className="text-sm text-muted-foreground">
-            No AI insights yet. Click &quot;Get advice&quot; for an explainable, cited financial
-            health check based on your real accounts and transactions.
+            No AI insights yet. Choose an agent and click &quot;Get advice&quot; for an
+            explainable, cited analysis based on your real accounts and transactions.
           </p>
         )}
       </CardContent>

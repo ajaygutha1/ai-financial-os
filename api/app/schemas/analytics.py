@@ -118,3 +118,44 @@ class RatiosResponse(BaseModel):
     debt_to_annual_income: Decimal | None
     months_considered: int
     methodology: str
+
+
+class RetirementContributionsResponse(BaseModel):
+    total_balance: Decimal
+    average_monthly_contribution: Decimal
+    account_count: int
+    months_considered: int
+    methodology: str
+
+
+class TaxableEventsResponse(BaseModel):
+    dividend_total: Decimal
+    interest_total: Decimal
+    buy_total: Decimal
+    sell_total: Decimal
+    dividend_count: int
+    interest_count: int
+    buy_count: int
+    sell_count: int
+    period_start: date
+    period_end: date
+    methodology: str
+
+
+class AnomalyFlag(BaseModel):
+    transaction_id: UUID
+    posted_at: date
+    account_name: str
+    merchant: str | None
+    amount: Decimal
+    # "possible_duplicate_charge" | "unusual_amount_for_category" | "new_merchant_large_amount"
+    reason: str
+    detail: str
+
+
+class AnomalyDetectionResponse(BaseModel):
+    flags: list[AnomalyFlag]
+    transactions_scanned: int
+    period_start: date
+    period_end: date
+    methodology: str

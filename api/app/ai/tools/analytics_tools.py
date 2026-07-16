@@ -6,14 +6,17 @@ from sqlalchemy.orm import Session
 from app.ai.provider.base import ToolDefinition
 from app.analytics.engine import AnalyticsEngine
 from app.analytics.modules import (
+    anomaly_detection,
     burn_rate,
     cash_flow,
     debt_payoff,
     emergency_fund,
     expense_trends,
     ratios,
+    retirement_contributions,
     savings_rate,
     subscriptions,
+    taxable_events,
 )
 
 # `months` is required (not optional) on every tool that takes it -- strict
@@ -95,14 +98,42 @@ _TOOL_SPECS: list[tuple[str, str, dict[str, Any]]] = [
         "Composite financial ratios: savings rate, expense/income, liquidity, debt-to-income.",
         _months_schema(ratios.DEFAULT_MONTHS),
     ),
+    (
+        "retirement_contributions",
+        "Total retirement-account balance and average net monthly contribution "
+        "over a trailing window.",
+        _months_schema(retirement_contributions.DEFAULT_MONTHS),
+    ),
+    (
+        "taxable_events",
+        "Dividend/interest/buy/sell transaction counts and totals over a trailing window "
+        "(not a capital-gains or cost-basis calculation).",
+        _months_schema(taxable_events.DEFAULT_MONTHS),
+    ),
+    (
+        "anomaly_detection",
+        "Rule-based flags over recent transactions: possible duplicate charges, unusually "
+        "large charges for their category, and large first-time charges from a new merchant.",
+        _months_schema(anomaly_detection.DEFAULT_MONTHS),
+    ),
 ]
 
+_TOOL_SPECS_BY_NAME = {
+    name: (name, description, schema) for name, description, schema in _TOOL_SPECS
+}
 
-def build_analytics_tools(db: Session, user_id: uuid.UUID) -> list[ToolDefinition]:
-    """One read-only tool per Milestone 3 analytics metric, each a thin
-    wrapper around AnalyticsEngine.run() -- the registry M3 built with this
-    exact use in mind."""
+
+def build_analytics_tools(
+    db: Session, user_id: uuid.UUID, *, include: set[str] | None = None
+) -> list[ToolDefinition]:
+    """One read-only tool per analytics metric, each a thin wrapper around
+    AnalyticsEngine.run() -- the registry M3 built with this exact use in
+    mind. `include` scopes the tool list to a subset of metric names (by
+    default every agent got every metric, which stopped scaling once
+    specialist agents arrived in Milestone 6 -- a Tax Advisor calling
+    `subscriptions` is just noise)."""
     engine = AnalyticsEngine(db)
+    specs = _TOOL_SPECS if include is None else [_TOOL_SPECS_BY_NAME[name] for name in include]
 
     def make_handler(metric_name: str) -> Any:
         def handler(tool_input: dict[str, Any]) -> dict[str, Any]:
@@ -118,5 +149,5 @@ def build_analytics_tools(db: Session, user_id: uuid.UUID) -> list[ToolDefinitio
             input_schema=schema,
             handler=make_handler(name),
         )
-        for name, description, schema in _TOOL_SPECS
+        for name, description, schema in specs
     ]

@@ -722,9 +722,152 @@ agent calls `search_knowledge_base` and records `sources_used` correctly, and
 that a scripted malformed submission (the exact failure shape hit live) is
 caught and retried rather than accepted.
 
+## Milestone 6 — Detailed Implementation Plan (built and verified)
+
+Goal: the remaining seven agents (Expense Analyst, Budget Coach, Retirement
+Planner, Tax Advisor, Fraud Detection, Investment Analyst, Portfolio Risk
+Analyst), reusing the M4/M5 tool-calling and RAG pattern rather than
+reinventing it seven times.
+
+### Architectural move: extract `BaseAgent` before writing agent #2
+
+`FinancialAdvisorAgent`'s tool-calling loop (M4), malformed-submission
+recovery (M5), and audit persistence had zero agent-specific logic in
+them -- every future agent would need the exact same ~150 lines. Rather than
+copy-paste that seven times, it was extracted first, as its own verified
+step, into `app/ai/agents/base.py`:
+
+- **`BaseRecommendationItem`** / **`BaseAdviceResult`**: the shared
+  `title`/`explanation`/`category`/`confidence`/`metrics_used`/`sources_used`
+  shape. Each concrete agent subclasses `BaseRecommendationItem` to narrow
+  `category` to its own domain `Literal` (pydantic supports redeclaring a
+  field with a narrower type in a subclass) -- mypy's list-invariance check
+  doesn't see through that narrowing on `recommendations: list[...]`, so each
+  subclass's override carries a documented `# type: ignore[assignment]`.
+- **`BaseAgent`**: `run()`, `_run_loop()`, `_submit_tool()`, and the
+  malformed-submission handling, all moved here unchanged. Concrete agents
+  supply only `agent_name`, `prompt_version`, `system_prompt`, `result_model`,
+  and `build_tools()`.
+- `FinancialAdvisorAgent` became the first subclass, refactored with the
+  explicit goal of zero behavior change -- verified by the full pre-existing
+  test suite passing unchanged before any new agent was written.
+
+### Scope decision: Investment Analyst and Portfolio Risk Analyst, without holdings data
+
+Neither agent has per-security data to work with -- `accounts` stores only a
+balance per account, with no holdings/positions table (tickers, shares, cost
+basis), and that arrives with M9's real Plaid/Coinbase integration, not this
+milestone. Rather than defer both agents or build a manual holdings table
+ahead of schedule, the choice made (with the user) was to ship both today at
+the account-type level: allocation and concentration reasoning over the
+existing `net_worth.by_account_type` breakdown (cash vs. investment vs.
+crypto vs. retirement), with both agents' system prompts explicitly stating
+the limitation and refusing to guess at per-security answers. Both gain
+richer analysis automatically once M9 lands real holdings, without any
+rework -- they'd simply gain a new tool to call.
+
+### New analytics modules (three, registered in the M3 engine)
+
+- **`retirement_contributions`**: total retirement-account balance plus
+  average net monthly contribution over a trailing window -- same
+  sign-convention helpers as M3's `cash_flow`.
+- **`taxable_events`**: dividend/interest/buy/sell transaction counts and
+  totals over a trailing window. Explicitly gross activity, not a
+  capital-gains calculation -- this schema doesn't track cost basis or tax
+  lots, and the Tax Advisor's system prompt is written to never imply
+  otherwise.
+- **`anomaly_detection`**: three deterministic, rule-based checks --
+  possible duplicate charges (same account/merchant/amount within 3 days),
+  unusually large charges for their category, and large first-time charges
+  from a new merchant. Each baseline (category average, overall average) is
+  computed **leave-one-out** -- excluding the transaction being evaluated
+  from its own baseline -- the same principle `expense_trends` (M3) already
+  established by comparing the latest month against the *prior* months'
+  average rather than a baseline that includes itself. Without that, one
+  large charge dilutes the very average it's measured against and can hide
+  from its own check in a small sample.
+
+All three follow the existing "routers call modules directly, the AI layer
+calls them through `AnalyticsEngine.run()`" split -- each also got a
+`GET /analytics/...` REST endpoint for free, ahead of any dashboard panel
+that will eventually use them (M7).
+
+`build_analytics_tools()` gained an `include: set[str] | None` filter so each
+specialist agent can request only its own metrics (e.g. Tax Advisor gets just
+`taxable_events`, not all twelve) rather than every agent seeing every tool
+-- unscoped, a Tax Advisor could technically call `subscriptions`, which is
+just noise for its purpose. `FinancialAdvisorAgent`, the generalist, still
+gets the full set via `include=None`.
+
+### RAG corpus: one new document, one new category
+
+`fraud-prevention-basics.md` (duplicate charges, what to do about a
+suspicious one, freezing a card) -- same hand-authored, explicitly-scoped
+style as the other six M5 documents. `"fraud"` added to `rag_tools.py`'s
+category enum.
+
+### Router: one generic endpoint replaces one hardcoded one
+
+`POST /api/v1/ai/{agent_slug}/advice` with an `AGENT_REGISTRY: dict[str,
+type[BaseAgent]]` replaces the M4/M5 hardcoded `/financial-advisor/advice`
+route -- every agent shares the same request/response shape, so one endpoint
+serves all eight rather than seven more hand-written ones. Unknown slugs
+return 404. `GET /api/v1/ai/recommendations` needed no changes -- it was
+already agent-agnostic (filters by user, not by agent), so it already
+aggregates every agent's output into one feed.
+
+### Live verification (real Anthropic API) found a robustness gap, not a new bug class
+
+The M5 malformed-submission failure mode (the model dumping real
+recommendation content as text inside `reasoning_summary`, wrapped in fake
+`<parameter name="...">` tags, while leaving `recommendations: []`)
+recurred live on Investment Analyst -- confirming it's a genuine,
+non-deterministic model quirk, not something specific to the Financial
+Advisor's prompt. What M5's fix (reject the malformed submission, nudge a
+retry) didn't anticipate: the model repeated the **identical** malformed
+shape five times in a row and exhausted the iteration budget, despite the
+first attempt already containing a perfectly good recommendation -- a text
+nudge doesn't reliably break the model out of this particular failure mode.
+
+Since the malformed shape is consistent -- the real payload always appears
+as a JSON array immediately after a `<parameter name="recommendations">`
+tag, at the end of the string -- `BaseAgent` now attempts **direct recovery**
+before falling back to reject-and-retry: extract the embedded JSON, validate
+it against the agent's own result model, and use it if it parses cleanly.
+An empty recovered list is treated as no recovery (a hollow "success" is no
+better than the original failure) and still falls through to the existing
+reject-and-retry safety net. Recovering beats retrying: it turns a
+reproducible failure into a same-turn success instead of gambling on the
+model correcting itself, and it was verified both as a unit test replaying
+the exact malformed shape captured from the live failure, and by re-running
+the live request that failed.
+
+### Frontend
+
+`AIInsightsCard` gained an agent picker (`Select`, one static config array of
+slug/label pairs -- the agent list is deploy-time config, not worth a
+`GET /agents` round trip) so "Get advice" can target any of the eight agents,
+and each recommendation now shows a small agent-name label alongside its
+category badge, since the feed mixes all eight agents' output chronologically
+and needs to stay legible as more agents get used. Verified in a real browser
+(Playwright-driven): switching the picker to "Fraud Detection" and clicking
+"Get advice" posts to `/api/v1/ai/fraud-detection/advice`, and the new
+recommendation appears at the top of the feed correctly labeled.
+
+### Testing
+
+32 new tests (172 total): the `BaseAgent` extraction verified as zero
+behavior change against the full pre-existing suite; 3 new analytics module
+test files (retirement contributions, taxable events, anomaly detection,
+including the leave-one-out baseline behavior); 14 parametrized tests
+(2 per new agent) proving each agent's distinct schema round-trips correctly
+through the shared loop and that `build_tools()` is correctly scoped; a
+recovery test replaying the exact malformed shape observed live; and router
+tests for the registry (`GET /agents`, unknown-slug 404, dispatch-by-slug).
+
 ## After approval
 
-M1 through M5 are all built and verified end-to-end (140 tests passing,
+M1 through M6 are all built and verified end-to-end (172 tests passing,
 mypy --strict and ruff clean, full Docker Compose stack, and the dashboard
 manually driven end-to-end in a real browser against realistic demo data). A
 few specifics were refined during hands-on M2 implementation versus the
@@ -735,5 +878,5 @@ same response shape; the audit-log immutability trigger also covers
 doesn't catch); and four DB-backed pipeline lookups (dedup, merchant
 resolution, transfer/refund matching) were bundled into a single
 `PipelineDependencies` object rather than four growing callback parameters.
-Milestone 6 (remaining agents reusing the M4/M5 tool-calling and RAG pattern)
-is next.
+Milestone 7 (the full dashboard -- every panel, near-real-time via
+SSE/polling) is next.

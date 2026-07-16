@@ -6,7 +6,7 @@ from app.ai.embeddings.base import EmbeddingProvider
 from app.ai.provider.base import ToolDefinition
 from app.ai.rag.retrieval import HybridRetriever
 
-_CATEGORIES = ["emergency_fund", "debt", "retirement", "tax", "investing", "budgeting"]
+_CATEGORIES = ["emergency_fund", "debt", "retirement", "tax", "investing", "budgeting", "fraud"]
 
 
 def build_rag_tool(db: Session, embeddings: EmbeddingProvider) -> ToolDefinition:

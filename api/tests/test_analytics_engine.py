@@ -11,6 +11,7 @@ def test_available_metrics_lists_all_modules(db_session: Session) -> None:
     engine = AnalyticsEngine(db_session)
 
     assert engine.available_metrics() == [
+        "anomaly_detection",
         "burn_rate",
         "cash_flow",
         "debt_payoff",
@@ -18,8 +19,10 @@ def test_available_metrics_lists_all_modules(db_session: Session) -> None:
         "expense_trends",
         "net_worth",
         "ratios",
+        "retirement_contributions",
         "savings_rate",
         "subscriptions",
+        "taxable_events",
     ]
 
 

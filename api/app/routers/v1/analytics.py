@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.analytics.modules import (
+    anomaly_detection,
     burn_rate,
     cash_flow,
     debt_payoff,
@@ -9,13 +10,16 @@ from app.analytics.modules import (
     expense_trends,
     net_worth,
     ratios,
+    retirement_contributions,
     savings_rate,
     subscriptions,
+    taxable_events,
 )
 from app.core.db import get_db
 from app.core.security import get_current_user
 from app.models.user import User
 from app.schemas.analytics import (
+    AnomalyDetectionResponse,
     BurnRateResponse,
     CashFlowResponse,
     DebtPayoffResponse,
@@ -23,8 +27,10 @@ from app.schemas.analytics import (
     ExpenseTrendsResponse,
     NetWorthResponse,
     RatiosResponse,
+    RetirementContributionsResponse,
     SavingsRateResponse,
     SubscriptionsResponse,
+    TaxableEventsResponse,
 )
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
@@ -107,3 +113,30 @@ def get_ratios(
     db: Session = Depends(get_db),
 ) -> RatiosResponse:
     return ratios.compute(db, current_user.id, months=months)
+
+
+@router.get("/retirement-contributions", response_model=RetirementContributionsResponse)
+def get_retirement_contributions(
+    months: int = Query(default=retirement_contributions.DEFAULT_MONTHS, ge=1, le=24),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RetirementContributionsResponse:
+    return retirement_contributions.compute(db, current_user.id, months=months)
+
+
+@router.get("/taxable-events", response_model=TaxableEventsResponse)
+def get_taxable_events(
+    months: int = Query(default=taxable_events.DEFAULT_MONTHS, ge=1, le=24),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TaxableEventsResponse:
+    return taxable_events.compute(db, current_user.id, months=months)
+
+
+@router.get("/anomaly-detection", response_model=AnomalyDetectionResponse)
+def get_anomaly_detection(
+    months: int = Query(default=anomaly_detection.DEFAULT_MONTHS, ge=1, le=24),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> AnomalyDetectionResponse:
+    return anomaly_detection.compute(db, current_user.id, months=months)

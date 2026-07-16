@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.analytics.modules import (
+    anomaly_detection,
     burn_rate,
     cash_flow,
     debt_payoff,
@@ -13,8 +14,10 @@ from app.analytics.modules import (
     expense_trends,
     net_worth,
     ratios,
+    retirement_contributions,
     savings_rate,
     subscriptions,
+    taxable_events,
 )
 from app.core.exceptions import ValidationError
 
@@ -33,6 +36,9 @@ _REGISTRY: dict[str, ComputeFn] = {
     "emergency_fund": emergency_fund.compute,
     "debt_payoff": debt_payoff.compute,
     "ratios": ratios.compute,
+    "retirement_contributions": retirement_contributions.compute,
+    "taxable_events": taxable_events.compute,
+    "anomaly_detection": anomaly_detection.compute,
 }
 
 

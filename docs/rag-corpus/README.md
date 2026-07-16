@@ -1,10 +1,11 @@
 # RAG reference corpus
 
-Six original, hand-authored reference documents covering evergreen personal
+Seven original, hand-authored reference documents covering evergreen personal
 finance concepts: emergency funds, debt payoff, retirement accounts, how
-marginal tax brackets work, diversification/asset allocation, and budgeting
-frameworks. This is demo/reference content for Milestone 5, not a copy of
-real IRS/SEC/Investopedia text — see "Why not scrape real sources" below.
+marginal tax brackets work, diversification/asset allocation, budgeting
+frameworks, and fraud-prevention basics (added in Milestone 6 for the Fraud
+Detection agent). This is demo/reference content for Milestone 5, not a copy
+of real IRS/SEC/Investopedia text — see "Why not scrape real sources" below.
 
 Ingest (or re-ingest after editing) with:
 

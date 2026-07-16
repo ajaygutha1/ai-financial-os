@@ -1,18 +1,22 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.ai.agents.financial_advisor import (
-    AgentIncompleteError,
-    FinancialAdvisorAgent,
-    RecommendationItem,
-)
+from app.ai.agents.base import AgentIncompleteError, BaseAgent, BaseRecommendationItem
+from app.ai.agents.budget_coach import BudgetCoachAgent
+from app.ai.agents.expense_analyst import ExpenseAnalystAgent
+from app.ai.agents.financial_advisor import FinancialAdvisorAgent
+from app.ai.agents.fraud_detection import FraudDetectionAgent
+from app.ai.agents.investment_analyst import InvestmentAnalystAgent
+from app.ai.agents.portfolio_risk_analyst import PortfolioRiskAnalystAgent
+from app.ai.agents.retirement_planner import RetirementPlannerAgent
+from app.ai.agents.tax_advisor import TaxAdvisorAgent
 from app.ai.embeddings.base import EmbeddingProvider
 from app.ai.embeddings.dependency import get_embedding_provider
 from app.ai.provider.base import AIProvider, AIRefusalError
 from app.ai.provider.dependency import get_ai_provider
 from app.core.config import get_settings
 from app.core.db import get_db
-from app.core.exceptions import AppError, ServiceUnavailableError
+from app.core.exceptions import AppError, NotFoundError, ServiceUnavailableError
 from app.core.security import get_current_user
 from app.models.user import User
 from app.repositories.ai_recommendation_repository import AIRecommendationRepository
@@ -25,8 +29,23 @@ from app.schemas.ai import (
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
+# URL slug -> agent class. Every agent shares the same request/response
+# shape (BaseAgent's run() signature, BaseRecommendationItem's fields), so
+# one generic endpoint below serves all of them rather than one hand-written
+# endpoint per agent.
+AGENT_REGISTRY: dict[str, type[BaseAgent]] = {
+    "financial-advisor": FinancialAdvisorAgent,
+    "expense-analyst": ExpenseAnalystAgent,
+    "budget-coach": BudgetCoachAgent,
+    "retirement-planner": RetirementPlannerAgent,
+    "tax-advisor": TaxAdvisorAgent,
+    "fraud-detection": FraudDetectionAgent,
+    "investment-analyst": InvestmentAnalystAgent,
+    "portfolio-risk-analyst": PortfolioRiskAnalystAgent,
+}
 
-def _to_response(item: RecommendationItem) -> RecommendationItemPublic:
+
+def _to_response(item: BaseRecommendationItem) -> RecommendationItemPublic:
     return RecommendationItemPublic(
         title=item.title,
         explanation=item.explanation,
@@ -37,21 +56,31 @@ def _to_response(item: RecommendationItem) -> RecommendationItemPublic:
     )
 
 
-@router.post("/financial-advisor/advice", response_model=FinancialAdviceResponse)
-def get_financial_advice(
+@router.get("/agents", response_model=list[str])
+def list_agents() -> list[str]:
+    return sorted(AGENT_REGISTRY)
+
+
+@router.post("/{agent_slug}/advice", response_model=FinancialAdviceResponse)
+def get_agent_advice(
+    agent_slug: str,
     payload: FinancialAdviceRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     provider: AIProvider = Depends(get_ai_provider),
     embeddings: EmbeddingProvider = Depends(get_embedding_provider),
 ) -> FinancialAdviceResponse:
+    agent_cls = AGENT_REGISTRY.get(agent_slug)
+    if agent_cls is None:
+        raise NotFoundError(f"Unknown agent: {agent_slug!r}.")
+
     settings = get_settings()
     if not settings.anthropic_api_key:
         raise ServiceUnavailableError(
             "AI features aren't configured yet -- set ANTHROPIC_API_KEY on the server."
         )
 
-    agent = FinancialAdvisorAgent(db, provider, embeddings)
+    agent = agent_cls(db, provider, embeddings)
 
     try:
         result = agent.run(user_id=current_user.id, user_message=payload.message)

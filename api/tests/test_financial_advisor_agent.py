@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 import pydantic
@@ -253,4 +254,49 @@ def test_agent_retries_when_submission_is_malformed(db_session: Session, test_us
     # are still audit-logged.
     verification = verify_ai_audit_log_chain(db_session)
     assert verification.rows_checked == 2
+    assert verification.first_divergent_id is None
+
+
+def test_agent_recovers_a_malformed_submission_that_contains_real_content(
+    db_session: Session, test_user: User
+) -> None:
+    # Observed live against the real API (Investment Analyst, Milestone 6):
+    # a reject-and-retry nudge is not reliable here -- the model repeated
+    # the identical malformed shape five times in a row and exhausted the
+    # iteration budget, despite the *first* attempt already containing a
+    # perfectly good recommendation embedded as text. Recovering it directly
+    # avoids that failure mode entirely, in exactly the shape actually seen
+    # in production (a JSON array of real recommendation objects following
+    # the fake `<parameter name="recommendations">` tag).
+    embedded_recommendation = {
+        "title": "Your accounts look healthy",
+        "explanation": "Net worth is positive and trending well.",
+        "category": "general",
+        "confidence": 0.85,
+        "metrics_used": ["net_worth"],
+        "sources_used": [],
+    }
+    malformed_but_recoverable = _tool_call_result(
+        "submit_recommendations",
+        {
+            "reasoning_summary": (
+                "Checked net worth; it looks solid.</parameter>\n"
+                f'<parameter name="recommendations">{json.dumps([embedded_recommendation])}'
+            ),
+            "recommendations": [],
+        },
+        call_id="toolu_recoverable",
+    )
+    provider = FakeAIProvider(db_session, [malformed_but_recoverable])
+    agent = FinancialAdvisorAgent(db_session, provider, FakeEmbeddingProvider())
+
+    result = agent.run(user_id=test_user.id, user_message="How am I doing?")
+
+    assert len(result.recommendations) == 1
+    assert result.recommendations[0].title == "Your accounts look healthy"
+    assert "<parameter" not in result.reasoning_summary
+
+    # Recovered on the first attempt -- only one model call, one audit row.
+    verification = verify_ai_audit_log_chain(db_session)
+    assert verification.rows_checked == 1
     assert verification.first_divergent_id is None
