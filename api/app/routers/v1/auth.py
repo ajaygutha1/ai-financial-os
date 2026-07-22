@@ -1,4 +1,3 @@
-import uuid
 from datetime import timedelta
 
 from fastapi import APIRouter, Cookie, Depends, Request, Response
@@ -9,13 +8,7 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.exceptions import UnauthorizedError, ValidationError
 from app.core.oauth import SUPPORTED_PROVIDERS, oauth
-from app.core.security import (
-    REFRESH_COOKIE_NAME,
-    TokenType,
-    create_access_token,
-    decode_token,
-    get_current_user,
-)
+from app.core.security import REFRESH_COOKIE_NAME, get_current_user
 from app.models.user import User
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserPublic
 from app.services.auth_service import AuthService
@@ -61,7 +54,15 @@ def login(
 
 
 @router.post("/logout", status_code=204)
-def logout(response: Response) -> None:
+def logout(
+    response: Response,
+    db: Session = Depends(get_db),
+    refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE_NAME),
+) -> None:
+    # True server-side revocation, not just clearing the cookie -- a copy of
+    # this token (another device, a thief) can never be exchanged again.
+    if refresh_token is not None:
+        AuthService(db).revoke_refresh_token(refresh_token)
     response.delete_cookie(REFRESH_COOKIE_NAME, path="/")
 
 
@@ -74,16 +75,8 @@ def refresh(
     if refresh_token is None:
         raise UnauthorizedError("Missing refresh token.")
 
-    payload = decode_token(refresh_token, TokenType.REFRESH)
-    user_id = uuid.UUID(payload["sub"])
-
     service = AuthService(db)
-    user = service.users.get_by_id(user_id)
-    if user is None or not user.is_active:
-        raise UnauthorizedError("User not found or inactive.")
-
-    new_access_token = create_access_token(user_id)
-    _, new_refresh_token = service.issue_tokens(user_id)
+    new_access_token, new_refresh_token = service.rotate_refresh_token(refresh_token)
     _set_refresh_cookie(response, new_refresh_token)
     return TokenResponse(access_token=new_access_token)
 

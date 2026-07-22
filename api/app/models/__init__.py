@@ -11,6 +11,7 @@ from app.models.goal import Goal
 from app.models.merchant import Merchant
 from app.models.rag_chunk import RAGChunk
 from app.models.rag_document import RAGDocument
+from app.models.refresh_token import RefreshToken
 from app.models.sync_job import SyncJob
 from app.models.transaction import Transaction
 from app.models.transaction_provenance import TransactionProvenance
@@ -30,6 +31,7 @@ __all__ = [
     "Merchant",
     "RAGChunk",
     "RAGDocument",
+    "RefreshToken",
     "SyncJob",
     "Transaction",
     "TransactionProvenance",

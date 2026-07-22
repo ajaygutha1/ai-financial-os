@@ -70,3 +70,61 @@ def test_me_returns_current_user(client: TestClient, auth_headers: dict[str, str
     response = client.get("/api/v1/auth/me", headers=auth_headers)
     assert response.status_code == 200
     assert response.json()["email"] == "test@example.com"
+
+
+def test_refresh_rotates_the_cookie_to_a_new_token(client: TestClient, test_user: User) -> None:
+    login_response = client.post(
+        "/api/v1/auth/login",
+        json={"email": test_user.email, "password": "correct-horse-battery"},
+    )
+    original_cookie = login_response.cookies["finos_refresh_token"]
+
+    refresh_response = client.post("/api/v1/auth/refresh")
+
+    assert refresh_response.status_code == 200
+    assert refresh_response.cookies["finos_refresh_token"] != original_cookie
+
+
+def test_reusing_an_already_rotated_refresh_token_is_rejected(
+    client: TestClient, test_user: User
+) -> None:
+    client.post(
+        "/api/v1/auth/login",
+        json={"email": test_user.email, "password": "correct-horse-battery"},
+    )
+    original_cookie = client.cookies["finos_refresh_token"]
+
+    first_refresh = client.post("/api/v1/auth/refresh")
+    assert first_refresh.status_code == 200
+
+    # Present the now-stale, already-rotated-away original token again --
+    # simulates a copied/stolen refresh token being replayed.
+    client.cookies.set("finos_refresh_token", original_cookie)
+    reuse_response = client.post("/api/v1/auth/refresh")
+    assert reuse_response.status_code == 401
+
+    # The whole family was revoked as a consequence, so even the token that
+    # *did* legitimately rotate (the one currently in the cookie jar from
+    # first_refresh) is dead too -- both parties are forced to re-login.
+    latest_cookie = first_refresh.cookies["finos_refresh_token"]
+    client.cookies.set("finos_refresh_token", latest_cookie)
+    follow_up = client.post("/api/v1/auth/refresh")
+    assert follow_up.status_code == 401
+
+
+def test_logout_revokes_the_refresh_token_server_side(client: TestClient, test_user: User) -> None:
+    client.post(
+        "/api/v1/auth/login",
+        json={"email": test_user.email, "password": "correct-horse-battery"},
+    )
+    # Captured before logout -- logout's Set-Cookie response clears this
+    # from the client's own cookie jar, so this stands in for a copy having
+    # been taken beforehand (a leaked/synced cookie jar, another device).
+    token_before_logout = client.cookies["finos_refresh_token"]
+
+    logout_response = client.post("/api/v1/auth/logout")
+    assert logout_response.status_code == 204
+
+    client.cookies.set("finos_refresh_token", token_before_logout)
+    response = client.post("/api/v1/auth/refresh")
+    assert response.status_code == 401
