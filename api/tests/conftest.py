@@ -137,6 +137,35 @@ def auth_headers(client: TestClient, test_user: User) -> dict[str, str]:
 
 
 @pytest.fixture
+def admin_user(db_session: Session) -> User:
+    from app.core.security import hash_password
+    from app.models.user import UserRole
+
+    user = User(
+        id=uuid.uuid4(),
+        email="admin@example.com",
+        hashed_password=hash_password("correct-horse-battery"),
+        full_name="Admin User",
+        is_active=True,
+        is_verified=True,
+        role=UserRole.ADMIN,
+    )
+    db_session.add(user)
+    db_session.commit()
+    return user
+
+
+@pytest.fixture
+def admin_auth_headers(client: TestClient, admin_user: User) -> dict[str, str]:
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": admin_user.email, "password": "correct-horse-battery"},
+    )
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
 def test_account(db_session: Session, test_user: User) -> Account:
     account = Account(
         id=uuid.uuid4(),

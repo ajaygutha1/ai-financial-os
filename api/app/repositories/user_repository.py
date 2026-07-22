@@ -13,6 +13,9 @@ class UserRepository:
     def get_by_id(self, user_id: uuid.UUID) -> User | None:
         return self.db.get(User, user_id)
 
+    def list_all(self) -> list[User]:
+        return list(self.db.scalars(select(User).order_by(User.created_at)))
+
     def get_by_email(self, email: str) -> User | None:
         return self.db.scalar(select(User).where(User.email == email))
 

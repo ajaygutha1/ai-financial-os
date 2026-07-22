@@ -19,6 +19,11 @@ class OAuthProvider(StrEnum):
     GITHUB = "github"
 
 
+class UserRole(StrEnum):
+    USER = "user"
+    ADMIN = "admin"
+
+
 class User(UUIDPKMixin, TimestampMixin, Base):
     __tablename__ = "users"
 
@@ -27,6 +32,9 @@ class User(UUIDPKMixin, TimestampMixin, Base):
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    role: Mapped[UserRole] = mapped_column(
+        String(16), nullable=False, default=UserRole.USER, server_default=UserRole.USER.value
+    )
 
     oauth_accounts: Mapped[list["OAuthAccount"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

@@ -8,6 +8,7 @@ from app.core.logging import configure_logging
 from app.core.rate_limit import GlobalRateLimitMiddleware
 from app.routers.v1 import (
     accounts,
+    admin,
     ai,
     analytics,
     auth,
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
     app.include_router(budget.router, prefix="/api/v1")
     app.include_router(categories.router, prefix="/api/v1")
     app.include_router(events.router, prefix="/api/v1")
+    app.include_router(admin.router, prefix="/api/v1")
 
     @app.get("/health")
     def health() -> dict[str, str]:

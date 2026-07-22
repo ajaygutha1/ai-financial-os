@@ -26,6 +26,11 @@ class UnauthorizedError(AppError):
     default_message = "Authentication required."
 
 
+class ForbiddenError(AppError):
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "You do not have permission to perform this action."
+
+
 class ConflictError(AppError):
     status_code = status.HTTP_409_CONFLICT
     default_message = "Resource already exists."

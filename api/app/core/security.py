@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.db import get_db
-from app.core.exceptions import UnauthorizedError
-from app.models.user import User
+from app.core.exceptions import ForbiddenError, UnauthorizedError
+from app.models.user import User, UserRole
 
 settings = get_settings()
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -89,3 +89,9 @@ def get_current_user(
     if user is None or not user.is_active:
         raise UnauthorizedError("User not found or inactive.")
     return user
+
+
+def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.role != UserRole.ADMIN:
+        raise ForbiddenError("This action requires an administrator role.")
+    return current_user
