@@ -82,9 +82,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
         self._seconds = seconds
         self._exempt_paths = exempt_paths or {"/health"}
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.url.path not in self._exempt_paths:
             key = f"ratelimit:global:{_client_key(request)}"
             try:

@@ -73,9 +73,7 @@ def register(
     return TokenResponse(access_token=access_token)
 
 
-@router.post(
-    "/login", response_model=TokenResponse, dependencies=[Depends(_login_rate_limit)]
-)
+@router.post("/login", response_model=TokenResponse, dependencies=[Depends(_login_rate_limit)])
 def login(
     payload: LoginRequest, response: Response, db: Session = Depends(get_db)
 ) -> TokenResponse:

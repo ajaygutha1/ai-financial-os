@@ -83,9 +83,7 @@ def test_refresh_with_mismatched_csrf_header_is_rejected(
         "/api/v1/auth/login",
         json={"email": test_user.email, "password": "correct-horse-battery"},
     )
-    response = client.post(
-        "/api/v1/auth/refresh", headers={"X-CSRF-Token": "not-the-real-token"}
-    )
+    response = client.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": "not-the-real-token"})
     assert response.status_code == 403
 
 
@@ -140,9 +138,7 @@ def test_reusing_an_already_rotated_refresh_token_is_rejected(
     assert follow_up.status_code == 401
 
 
-def test_login_is_rate_limited_after_repeated_attempts(
-    client: TestClient, test_user: User
-) -> None:
+def test_login_is_rate_limited_after_repeated_attempts(client: TestClient, test_user: User) -> None:
     # Limit is 10/60s (app/routers/v1/auth.py) -- wrong-password attempts
     # count the same as successful ones, since the limiter runs before auth
     # is even checked.

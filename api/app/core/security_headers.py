@@ -11,9 +11,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         super().__init__(app)  # type: ignore[arg-type]
         self._hsts = hsts
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
@@ -24,7 +22,5 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             # Only sent when actually served over HTTPS (production) -- HSTS
             # over plain HTTP in local dev would get cached by the browser
             # and break the next http:// request to the same host.
-            response.headers["Strict-Transport-Security"] = (
-                "max-age=63072000; includeSubDomains"
-            )
+            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
         return response

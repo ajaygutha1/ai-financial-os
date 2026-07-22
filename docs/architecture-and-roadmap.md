@@ -1008,11 +1008,118 @@ the SSE ticket/stream logic (issuance, single-use consumption, invalid/reused
 rejection, and the connected-message handshake) exercised as direct coroutine
 calls rather than through `TestClient` for the reasons above.
 
+## Milestone 8 — Detailed Implementation Plan (built and verified)
+
+Goal: security hardening across the board -- this was the first milestone
+where nothing user-visible was added; every task closes a gap research
+found before writing any code (secrets with no production validation, RBAC
+that didn't exist at all, refresh tokens with no revocation or rotation
+tracking, zero rate limiting anywhere, unencrypted credential columns, no
+security-headers or CSRF story). Scoped via research plus one explicit
+decision with the user: **RBAC scope is a minimal admin role**, not a full
+permission system, since this is still single-tenant (no org/team model)
+and the only real need is a support/ops surface.
+
+### Secrets management and encryption at rest
+
+`Settings` gained a `model_validator` that only runs its strict checks when
+`environment == "production"`: every secret (`jwt_secret`, `session_secret`,
+`encryption_key`) is rejected if it's still the `.env.example` placeholder,
+too short, or (for the two JWT-adjacent secrets) identical to each other --
+`session_secret` used to just be a property returning `jwt_secret`, silently
+reusing one leaked secret for two purposes. Dev/test keep permissive
+fallbacks so local setup still works with the example file. `EncryptedString`
+(a SQLAlchemy `TypeDecorator` wrapping Fernet) replaced the plain `String`
+columns for OAuth and connector credential tokens, which were explicitly
+commented as "unencrypted placeholders" since M2/M4 -- encryption/decryption
+is transparent to every caller, and a dedicated test reads the raw column via
+`text()` to prove the stored bytes are ciphertext, not the plaintext token.
+
+### Refresh token hardening: revocation and rotation-reuse detection
+
+Refresh tokens previously had a 14-day TTL and nothing else -- no way to
+revoke one server-side, no rotation, so a copied token stayed valid until it
+expired no matter what. Added a `refresh_tokens` table tracking every issued
+token by `jti`, grouped into rotation chains by `family_id`. `/auth/refresh`
+now rotates on every call (the old token is marked revoked, a new one issued
+in the same family) and `/auth/logout` revokes server-side rather than just
+clearing the cookie. Presenting an already-revoked token -- the signal that a
+copy was stolen and used before or after the legitimate client rotated --
+revokes the *entire family*, forcing both parties to re-authenticate rather
+than only closing the one compromised token.
+
+### Rate limiting
+
+A small Redis-backed fixed-window limiter (`INCR` + `EXPIRE` per
+`scope:client` key), deliberately built in-house rather than pulling in a
+library: Redis was already a hard dependency and the pattern is a few lines.
+Tight per-route budgets on the brute-force targets (`/auth/register` 5/min,
+`/auth/login` 10/min, `/auth/refresh` 30/min) plus a coarser 300/min global
+per-IP ceiling as defense-in-depth for everything else. Fails open on Redis
+errors, matching the philosophy already established by `EventBus.dispatch()`
+-- a Redis outage must not take the whole API down for legitimate users. One
+real bug found while testing: an exception raised inside
+`BaseHTTPMiddleware.dispatch()` (the global middleware) is *not* caught by
+the app's registered `AppError` handler, which only wraps the router --
+without building the 429 response by hand in the middleware itself, a global
+rate-limit trip would have surfaced as an unhandled 500.
+
+### Minimal admin role (RBAC)
+
+Added a `role` column to `User` (`user` | `admin`) and a `require_admin`
+FastAPI dependency (403 for non-admins). One real protected surface for the
+support/ops use case: list all users, view one, deactivate one. Deactivation
+also revokes every outstanding refresh token for that user rather than
+relying solely on the existing `is_active` check the next time a refresh is
+attempted, so an admin action ends active sessions immediately instead of
+waiting out the short access-token TTL. Admins cannot deactivate their own
+account.
+
+### OWASP pass: security headers and CSRF
+
+A `SecurityHeadersMiddleware` adds the standard set to every response
+(`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`,
+`Permissions-Policy`, and a maximally strict CSP since this is a JSON/SSE API
+with no server-rendered HTML to protect). HSTS is gated to `environment ==
+"production"` only -- sending it in local dev would get cached by the
+browser and start breaking the next plain-`http://` request to the same
+host. Added double-submit-cookie CSRF protection for the two endpoints that
+act purely on a cookie rather than a bearer token an attacker's page can't
+read (`/auth/refresh`, `/auth/logout`): a non-`httponly` `finos_csrf_token`
+cookie is issued alongside the refresh token, and the frontend must echo it
+back as an `X-CSRF-Token` header. The check only runs once a real
+cookie-based session is confirmed present, so a fully logged-out client still
+gets a clean 401/204 rather than a confusing 403.
+
+### Testing and live verification
+
+43 new tests (242 total): config secret-guard validation across
+dev/production; Fernet encryption round-trips and encrypted-at-rest proof
+via raw-column reads; refresh token rotation, reuse-detection revoking the
+whole family, and server-side logout revocation; rate-limit enforcement on
+each auth route plus the global middleware ceiling and its fail-open
+behavior under a simulated Redis outage; admin RBAC (403 for non-admins,
+list/view/deactivate, self-deactivation guard); and CSRF enforcement
+(missing header, mismatched header, and the no-session-no-check case).
+Live-verified end-to-end against the real running stack rather than trusting
+unit tests alone: registered a user, confirmed both cookies (httponly
+refresh, readable CSRF) were set correctly, hit `/auth/refresh` and
+`/auth/logout` with and without the CSRF header, tripped the login rate
+limiter at the real 10/min threshold and watched it clear after the window,
+promoted a user to admin directly in the dev database and exercised
+list/view/deactivate/self-deactivation-guard through the live API, and
+confirmed every response carries the new security headers. Browser-based
+UI verification of the frontend's CSRF-header wiring specifically wasn't
+possible in this environment (no Playwright/chromium driver installed) --
+the frontend change was verified via a clean `tsc --noEmit` and `eslint`
+pass plus the backend HTTP flow it targets, not a driven browser session.
+
 ## After approval
 
-M1 through M7 are all built and verified end-to-end (199 tests passing,
-mypy --strict and ruff clean, full Docker Compose stack, and the dashboard
-manually driven end-to-end in a real browser against realistic demo data,
+M1 through M8 are all built and verified end-to-end (242 tests passing,
+mypy --strict and ruff clean on the backend, lint and typecheck clean on the
+frontend, full Docker Compose stack, and the dashboard manually driven
+end-to-end in a real browser against realistic demo data through M7,
 including a genuine cross-session SSE live-update). A few specifics were
 refined during hands-on M2 implementation versus the original spec:
 `ofxparse` was used over `ofxtools` for OFX parsing; the shared `imports.py`
@@ -1021,6 +1128,4 @@ response shape; the audit-log immutability trigger also covers `TRUNCATE` (a
 separate Postgres trigger event that a bare `DELETE` trigger doesn't catch);
 and four DB-backed pipeline lookups (dedup, merchant resolution,
 transfer/refund matching) were bundled into a single `PipelineDependencies`
-object rather than four growing callback parameters. Milestone 8 (security
-hardening -- RBAC, rate limiting, JWT refresh hardening, secrets management,
-an OWASP pass) is next.
+object rather than four growing callback parameters.
