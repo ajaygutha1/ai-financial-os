@@ -26,6 +26,7 @@ import app.models  # noqa: F401  (registers all models on Base.metadata)
 from alembic import command
 from app.core.config import get_settings
 from app.core.db import Base, get_db
+from app.core.redis import get_redis_client
 from app.main import app as fastapi_app
 from app.models.account import Account, AccountType
 from app.models.user import User
@@ -92,6 +93,15 @@ def db_session(engine: Engine) -> Generator[Session, None, None]:
 def client(db_session: Session) -> Generator[TestClient, None, None]:
     def override_get_db() -> Generator[Session, None, None]:
         yield db_session
+
+    # TestClient requests all share one synthetic client address, so every
+    # test would otherwise increment the *same* rate-limit counters (Milestone
+    # 8) against the one Redis DB the whole suite shares -- flush them before
+    # each test so a rate-limit assertion in one test can't 429 an unrelated
+    # login/register call in a later one.
+    redis_client = get_redis_client()
+    for key in redis_client.scan_iter("ratelimit:*"):
+        redis_client.delete(key)
 
     fastapi_app.dependency_overrides[get_db] = override_get_db
     with TestClient(fastapi_app) as test_client:

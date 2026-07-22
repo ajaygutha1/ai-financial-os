@@ -5,6 +5,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.core.config import get_settings
 from app.core.exceptions import AppError, app_error_handler
 from app.core.logging import configure_logging
+from app.core.rate_limit import GlobalRateLimitMiddleware
 from app.routers.v1 import (
     accounts,
     ai,
@@ -33,6 +34,11 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Outermost middleware (added last -> runs first): a coarse per-IP
+    # ceiling across every route, on top of the tighter per-route limits on
+    # /auth/*. See core/rate_limit.py for why this fails open on Redis
+    # errors instead of blocking the whole API.
+    app.add_middleware(GlobalRateLimitMiddleware, times=300, seconds=60)
 
     app.add_exception_handler(AppError, app_error_handler)
 

@@ -36,6 +36,11 @@ class ServiceUnavailableError(AppError):
     default_message = "Service temporarily unavailable."
 
 
+class TooManyRequestsError(AppError):
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    default_message = "Too many requests -- please try again later."
+
+
 async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, AppError)
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})

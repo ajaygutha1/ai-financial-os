@@ -112,6 +112,43 @@ def test_reusing_an_already_rotated_refresh_token_is_rejected(
     assert follow_up.status_code == 401
 
 
+def test_login_is_rate_limited_after_repeated_attempts(
+    client: TestClient, test_user: User
+) -> None:
+    # Limit is 10/60s (app/routers/v1/auth.py) -- wrong-password attempts
+    # count the same as successful ones, since the limiter runs before auth
+    # is even checked.
+    for _ in range(10):
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"email": test_user.email, "password": "wrong-password"},
+        )
+        assert response.status_code == 401
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": test_user.email, "password": "wrong-password"},
+    )
+    assert response.status_code == 429
+
+
+def test_register_is_rate_limited_after_repeated_attempts(client: TestClient) -> None:
+    # Limit is 5/60s -- each call uses a distinct email so it isn't the
+    # duplicate-email 409 path being counted, just raw request volume.
+    for i in range(5):
+        response = client.post(
+            "/api/v1/auth/register",
+            json={"email": f"ratelimit-{i}@example.com", "password": "s3cure-password"},
+        )
+        assert response.status_code == 201
+
+    response = client.post(
+        "/api/v1/auth/register",
+        json={"email": "ratelimit-overflow@example.com", "password": "s3cure-password"},
+    )
+    assert response.status_code == 429
+
+
 def test_logout_revokes_the_refresh_token_server_side(client: TestClient, test_user: User) -> None:
     client.post(
         "/api/v1/auth/login",

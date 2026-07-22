@@ -8,6 +8,7 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.exceptions import UnauthorizedError, ValidationError
 from app.core.oauth import SUPPORTED_PROVIDERS, oauth
+from app.core.rate_limit import rate_limit
 from app.core.security import REFRESH_COOKIE_NAME, get_current_user
 from app.models.user import User
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserPublic
@@ -15,6 +16,13 @@ from app.services.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
+
+# Tighter than the global default (app/main.py) -- these are exactly the
+# endpoints brute-force/credential-stuffing targets, so they get their own,
+# much smaller per-IP budget rather than sharing the generic one.
+_login_rate_limit = rate_limit(scope="login", times=10, seconds=60)
+_register_rate_limit = rate_limit(scope="register", times=5, seconds=60)
+_refresh_rate_limit = rate_limit(scope="refresh", times=30, seconds=60)
 
 
 def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
@@ -29,7 +37,12 @@ def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
     )
 
 
-@router.post("/register", response_model=TokenResponse, status_code=201)
+@router.post(
+    "/register",
+    response_model=TokenResponse,
+    status_code=201,
+    dependencies=[Depends(_register_rate_limit)],
+)
 def register(
     payload: RegisterRequest, response: Response, db: Session = Depends(get_db)
 ) -> TokenResponse:
@@ -42,7 +55,9 @@ def register(
     return TokenResponse(access_token=access_token)
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post(
+    "/login", response_model=TokenResponse, dependencies=[Depends(_login_rate_limit)]
+)
 def login(
     payload: LoginRequest, response: Response, db: Session = Depends(get_db)
 ) -> TokenResponse:
@@ -66,7 +81,9 @@ def logout(
     response.delete_cookie(REFRESH_COOKIE_NAME, path="/")
 
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post(
+    "/refresh", response_model=TokenResponse, dependencies=[Depends(_refresh_rate_limit)]
+)
 def refresh(
     response: Response,
     db: Session = Depends(get_db),
