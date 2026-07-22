@@ -1,3 +1,5 @@
+import hmac
+import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -5,7 +7,7 @@ from typing import Any
 
 import bcrypt
 import jwt
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -18,6 +20,19 @@ settings = get_settings()
 bearer_scheme = HTTPBearer(auto_error=False)
 
 REFRESH_COOKIE_NAME = "finos_refresh_token"
+
+# Double-submit cookie CSRF protection for the cookie-authenticated endpoints
+# (/auth/refresh, /auth/logout -- the only two that act purely on a cookie
+# rather than a bearer token an attacker's page can't read). Deliberately
+# NOT httponly: the frontend must be able to read it with JS and echo it
+# back as a header, which a cross-site attacker's page cannot do since it
+# can't read cookies set on this origin.
+CSRF_COOKIE_NAME = "finos_csrf_token"
+CSRF_HEADER_NAME = "X-CSRF-Token"
+
+
+def generate_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
 
 # bcrypt ignores/rejects input past 72 bytes; truncate deliberately rather
 # than let long passwords raise at hash time (matches bcrypt's traditional
@@ -95,3 +110,12 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
     if current_user.role != UserRole.ADMIN:
         raise ForbiddenError("This action requires an administrator role.")
     return current_user
+
+
+def verify_csrf(request: Request) -> None:
+    cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
+    header_token = request.headers.get(CSRF_HEADER_NAME)
+    if not cookie_token or not header_token or not hmac.compare_digest(
+        cookie_token, header_token
+    ):
+        raise ForbiddenError("Missing or invalid CSRF token.")

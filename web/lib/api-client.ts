@@ -26,10 +26,24 @@ export class ApiError extends Error {
   }
 }
 
+// Double-submit CSRF cookie (Milestone 8) -- set by the backend alongside
+// the refresh token cookie, deliberately not httpOnly so it can be read
+// here and echoed back as a header. A cross-site attacker's page can
+// trigger a request with the cookie attached automatically, but can't read
+// this cookie's value to put it in the header too.
+const CSRF_COOKIE_NAME = "finos_csrf_token";
+
+function readCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 async function refreshAccessToken(): Promise<string | null> {
+  const csrfToken = readCookie(CSRF_COOKIE_NAME);
   const response = await fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
     method: "POST",
     credentials: "include",
+    headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
   });
   if (!response.ok) {
     setAccessToken(null);
@@ -47,6 +61,10 @@ function buildHeaders(token: string | null, options: RequestInit): HeadersInit {
   }
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
+  }
+  const csrfToken = readCookie(CSRF_COOKIE_NAME);
+  if (csrfToken) {
+    headers.set("X-CSRF-Token", csrfToken);
   }
   return headers;
 }

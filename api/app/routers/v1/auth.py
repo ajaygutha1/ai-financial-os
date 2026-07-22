@@ -9,7 +9,13 @@ from app.core.db import get_db
 from app.core.exceptions import UnauthorizedError, ValidationError
 from app.core.oauth import SUPPORTED_PROVIDERS, oauth
 from app.core.rate_limit import rate_limit
-from app.core.security import REFRESH_COOKIE_NAME, get_current_user
+from app.core.security import (
+    CSRF_COOKIE_NAME,
+    REFRESH_COOKIE_NAME,
+    generate_csrf_token,
+    get_current_user,
+    verify_csrf,
+)
 from app.models.user import User
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserPublic
 from app.services.auth_service import AuthService
@@ -25,14 +31,26 @@ _register_rate_limit = rate_limit(scope="register", times=5, seconds=60)
 _refresh_rate_limit = rate_limit(scope="refresh", times=30, seconds=60)
 
 
-def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+def _set_auth_cookies(response: Response, refresh_token: str) -> None:
+    max_age = int(timedelta(days=settings.refresh_token_ttl_days).total_seconds())
     response.set_cookie(
         key=REFRESH_COOKIE_NAME,
         value=refresh_token,
         httponly=True,
         secure=settings.environment == "production",
         samesite="lax",
-        max_age=int(timedelta(days=settings.refresh_token_ttl_days).total_seconds()),
+        max_age=max_age,
+        path="/",
+    )
+    # Not httponly -- the frontend reads this and echoes it back as the
+    # X-CSRF-Token header on /refresh and /logout (see verify_csrf).
+    response.set_cookie(
+        key=CSRF_COOKIE_NAME,
+        value=generate_csrf_token(),
+        httponly=False,
+        secure=settings.environment == "production",
+        samesite="lax",
+        max_age=max_age,
         path="/",
     )
 
@@ -51,7 +69,7 @@ def register(
         email=payload.email, password=payload.password, full_name=payload.full_name
     )
     access_token, refresh_token = service.issue_tokens(user.id)
-    _set_refresh_cookie(response, refresh_token)
+    _set_auth_cookies(response, refresh_token)
     return TokenResponse(access_token=access_token)
 
 
@@ -64,37 +82,51 @@ def login(
     service = AuthService(db)
     user = service.authenticate(email=payload.email, password=payload.password)
     access_token, refresh_token = service.issue_tokens(user.id)
-    _set_refresh_cookie(response, refresh_token)
+    _set_auth_cookies(response, refresh_token)
     return TokenResponse(access_token=access_token)
 
 
 @router.post("/logout", status_code=204)
 def logout(
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
     refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE_NAME),
 ) -> None:
-    # True server-side revocation, not just clearing the cookie -- a copy of
-    # this token (another device, a thief) can never be exchanged again.
+    # CSRF is only checked when there's actually a session to revoke -- an
+    # already-logged-out client just gets its (already absent) cookies
+    # cleared, no state change to protect.
     if refresh_token is not None:
+        verify_csrf(request)
+        # True server-side revocation, not just clearing the cookie -- a
+        # copy of this token (another device, a thief) can never be
+        # exchanged again.
         AuthService(db).revoke_refresh_token(refresh_token)
     response.delete_cookie(REFRESH_COOKIE_NAME, path="/")
+    response.delete_cookie(CSRF_COOKIE_NAME, path="/")
 
 
 @router.post(
-    "/refresh", response_model=TokenResponse, dependencies=[Depends(_refresh_rate_limit)]
+    "/refresh",
+    response_model=TokenResponse,
+    dependencies=[Depends(_refresh_rate_limit)],
 )
 def refresh(
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
     refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE_NAME),
 ) -> TokenResponse:
     if refresh_token is None:
         raise UnauthorizedError("Missing refresh token.")
+    # Checked only once we know there's a real cookie-based session in play,
+    # so a fully logged-out client still gets a clean 401 rather than a
+    # confusing 403.
+    verify_csrf(request)
 
     service = AuthService(db)
     new_access_token, new_refresh_token = service.rotate_refresh_token(refresh_token)
-    _set_refresh_cookie(response, new_refresh_token)
+    _set_auth_cookies(response, new_refresh_token)
     return TokenResponse(access_token=new_access_token)
 
 
@@ -152,5 +184,5 @@ async def oauth_callback(
     _, refresh_token = service.issue_tokens(user.id)
 
     redirect_response = RedirectResponse(url=f"{settings.web_base_url}/callback/{provider}")
-    _set_refresh_cookie(redirect_response, refresh_token)
+    _set_auth_cookies(redirect_response, refresh_token)
     return redirect_response

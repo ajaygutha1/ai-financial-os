@@ -6,6 +6,7 @@ from app.core.config import get_settings
 from app.core.exceptions import AppError, app_error_handler
 from app.core.logging import configure_logging
 from app.core.rate_limit import GlobalRateLimitMiddleware
+from app.core.security_headers import SecurityHeadersMiddleware
 from app.routers.v1 import (
     accounts,
     admin,
@@ -40,6 +41,7 @@ def create_app() -> FastAPI:
     # /auth/*. See core/rate_limit.py for why this fails open on Redis
     # errors instead of blocking the whole API.
     app.add_middleware(GlobalRateLimitMiddleware, times=300, seconds=60)
+    app.add_middleware(SecurityHeadersMiddleware, hsts=settings.environment == "production")
 
     app.add_exception_handler(AppError, app_error_handler)
 
