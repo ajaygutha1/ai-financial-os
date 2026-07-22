@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from cryptography.fernet import Fernet
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -9,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _PLACEHOLDER_SECRETS = {
     "change-me-to-a-long-random-string-in-every-environment",
     "change-me-to-a-different-long-random-string-in-every-environment",
+    "VMLWJOtffXQuSHEHlgUY9mc_2Tpuzg_zr1yzKjqtImY=",
 }
 _MIN_SECRET_LENGTH = 32
 
@@ -31,6 +33,12 @@ class Settings(BaseSettings):
     # Left blank in dev, where it falls back to jwt_secret for convenience;
     # production must set its own.
     session_secret: str = ""
+    # Field-level encryption key (Milestone 8) for connector_credential and
+    # oauth_accounts' token columns -- unlike jwt_secret/session_secret this
+    # can't be left blank in dev, since Fernet requires a well-formed key to
+    # construct at all; the default here is a real, valid, but publicly-known
+    # key checked into .env.example, guarded out of production the same way.
+    encryption_key: str = "VMLWJOtffXQuSHEHlgUY9mc_2Tpuzg_zr1yzKjqtImY="
 
     google_client_id: str = ""
     google_client_secret: str = ""
@@ -62,6 +70,17 @@ class Settings(BaseSettings):
             # fallback can never silently reach a real deploy.
             self.session_secret = self.jwt_secret
 
+        # Malformed regardless of environment -- Fernet(...) would raise
+        # inside every encrypt/decrypt call otherwise, deep in a request
+        # instead of at startup.
+        try:
+            Fernet(self.encryption_key.encode())
+        except Exception as exc:
+            raise ValueError(
+                "encryption_key is not a valid Fernet key -- generate one with "
+                "`Fernet.generate_key()`."
+            ) from exc
+
         if self.environment == "production":
             self._require_strong_secret("jwt_secret", self.jwt_secret)
             self._require_strong_secret("session_secret", self.session_secret)
@@ -69,6 +88,12 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "session_secret must be set to its own value in production -- "
                     "reusing jwt_secret means a leak of one compromises both."
+                )
+            if self.encryption_key in _PLACEHOLDER_SECRETS:
+                raise ValueError(
+                    "encryption_key is still set to the .env.example placeholder value -- "
+                    "generate a real key with `Fernet.generate_key()` before running in "
+                    "production."
                 )
         return self
 

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
 from app.models.base import TimestampMixin, UUIDPKMixin
+from app.models.encrypted_string import EncryptedString
 
 
 class ConnectorCredentialStatus(StrEnum):
@@ -26,10 +27,10 @@ class ConnectorCredential(UUIDPKMixin, TimestampMixin, Base):
     )
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     external_item_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    # Unencrypted placeholders (same convention as M1's oauth_accounts); real
-    # encryption is a Milestone 8 concern.
-    access_token_enc: Mapped[str | None] = mapped_column(String, nullable=True)
-    refresh_token_enc: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Encrypted at rest (Milestone 8) via EncryptedString -- transparent to
+    # every caller, which reads/writes plain strings as before.
+    access_token_enc: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
+    refresh_token_enc: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default=ConnectorCredentialStatus.ACTIVE.value
     )

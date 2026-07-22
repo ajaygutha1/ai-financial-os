@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
 from app.models.base import TimestampMixin, UUIDPKMixin
+from app.models.encrypted_string import EncryptedString
 
 if TYPE_CHECKING:
     from app.models.account import Account
@@ -44,7 +45,9 @@ class OAuthAccount(UUIDPKMixin, TimestampMixin, Base):
     )
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     provider_account_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    access_token_enc: Mapped[str | None] = mapped_column(String, nullable=True)
-    refresh_token_enc: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Encrypted at rest (Milestone 8) via EncryptedString -- transparent to
+    # every caller, which reads/writes plain strings as before.
+    access_token_enc: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
+    refresh_token_enc: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
 
     user: Mapped[User] = relationship(back_populates="oauth_accounts")

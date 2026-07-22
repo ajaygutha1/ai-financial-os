@@ -1,4 +1,5 @@
 import pytest
+from cryptography.fernet import Fernet
 from pydantic import ValidationError
 
 from app.core.config import Settings
@@ -6,6 +7,7 @@ from app.core.config import Settings
 _STRONG_SECRET = "a" * 40
 _OTHER_STRONG_SECRET = "b" * 40
 _PLACEHOLDER = "change-me-to-a-long-random-string-in-every-environment"
+_REAL_ENCRYPTION_KEY = Fernet.generate_key().decode()
 
 
 def _base_kwargs(**overrides: object) -> dict[str, object]:
@@ -14,6 +16,7 @@ def _base_kwargs(**overrides: object) -> dict[str, object]:
         "redis_url": "redis://localhost:6379/0",
         "jwt_secret": _STRONG_SECRET,
         "session_secret": _OTHER_STRONG_SECRET,
+        "encryption_key": _REAL_ENCRYPTION_KEY,
     }
     kwargs.update(overrides)
     return kwargs
@@ -48,3 +51,16 @@ def test_production_rejects_session_secret_equal_to_jwt_secret() -> None:
 def test_production_accepts_two_distinct_strong_secrets() -> None:
     # Must not raise.
     Settings(environment="production", **_base_kwargs())
+
+
+def test_malformed_encryption_key_is_rejected_in_any_environment() -> None:
+    with pytest.raises(ValidationError, match="not a valid Fernet key"):
+        Settings(environment="development", **_base_kwargs(encryption_key="not-a-fernet-key"))
+
+
+def test_production_rejects_the_placeholder_encryption_key() -> None:
+    with pytest.raises(ValidationError, match="encryption_key is still set"):
+        Settings(
+            environment="production",
+            **_base_kwargs(encryption_key="VMLWJOtffXQuSHEHlgUY9mc_2Tpuzg_zr1yzKjqtImY="),
+        )
