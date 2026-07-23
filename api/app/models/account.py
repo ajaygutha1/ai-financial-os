@@ -52,6 +52,16 @@ class Account(UUIDPKMixin, TimestampMixin, Base):
     mask: Mapped[str | None] = mapped_column(String(8), nullable=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default=AccountSource.MANUAL)
     external_account_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Which linked credential (Plaid Item, etc.) this account's real data
+    # comes from -- Milestone 9. Nullable: manual/CSV/stub-sourced accounts
+    # have none. ON DELETE SET NULL rather than CASCADE: unlinking a bank
+    # should orphan the link, not delete the account and its transaction
+    # history the user still owns.
+    connector_credential_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("connector_credential.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # Denormalized resume-point for the Celery sync task (same precedent as
     # current_balance summarizing transactions) -- Milestone 2.

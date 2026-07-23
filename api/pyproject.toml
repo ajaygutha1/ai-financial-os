@@ -25,6 +25,7 @@ dependencies = [
     "anthropic>=0.40",
     "pgvector>=0.3",
     "fastembed>=0.4",
+    "plaid-python>=29.0.0",
 ]
 
 [dependency-groups]

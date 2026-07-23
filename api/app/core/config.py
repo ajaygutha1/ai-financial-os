@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     ai_effort: str = "high"
     ai_max_tool_iterations: int = 6
 
+    # --- Plaid (Milestone 9) ---
+    # Blank by default -- Plaid is an optional feature (like the AI keys
+    # above), not a required boot dependency. Only the sandbox environment
+    # is supported end-to-end right now (see the roadmap doc); production
+    # would need its own review before flipping plaid_env.
+    plaid_client_id: str = ""
+    plaid_secret: str = ""
+    plaid_env: str = "sandbox"
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
