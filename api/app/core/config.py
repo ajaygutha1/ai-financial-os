@@ -34,11 +34,16 @@ class Settings(BaseSettings):
     # production must set its own.
     session_secret: str = ""
     # Field-level encryption key (Milestone 8) for connector_credential and
-    # oauth_accounts' token columns -- unlike jwt_secret/session_secret this
-    # can't be left blank in dev, since Fernet requires a well-formed key to
-    # construct at all; the default here is a real, valid, but publicly-known
-    # key checked into .env.example, guarded out of production the same way.
-    encryption_key: str = "VMLWJOtffXQuSHEHlgUY9mc_2Tpuzg_zr1yzKjqtImY="
+    # oauth_accounts' token columns. Required, no default -- unlike
+    # session_secret, this can't safely fall back to something else if
+    # omitted, and unlike the placeholder-value guard below (which only
+    # fires when environment == "production"), a missing value must fail
+    # every environment's boot, not just production's: a deploy that
+    # forgets to set it should never silently start up using a key anyone
+    # can read out of this file's own git history. Dev sets it explicitly
+    # in .env (same well-known placeholder value is fine there -- see
+    # .env.example -- it's an explicit, visible choice, not a silent one).
+    encryption_key: str
 
     google_client_id: str = ""
     google_client_secret: str = ""

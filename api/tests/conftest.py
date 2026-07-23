@@ -6,6 +6,11 @@ os.environ["DATABASE_URL"] = (
 os.environ["REDIS_URL"] = "redis://localhost:6379/1"
 os.environ["JWT_SECRET"] = "test-secret-not-for-production-use-only-32bytes-min"
 os.environ["ENVIRONMENT"] = "test"
+# encryption_key has no default (Milestone 8 fix -- a missing value must fail
+# to boot, not silently reach for a known placeholder), so tests must set one
+# explicitly. Same well-known placeholder used in .env.example -- harmless
+# here since ENVIRONMENT=test, not "production".
+os.environ["ENCRYPTION_KEY"] = "VMLWJOtffXQuSHEHlgUY9mc_2Tpuzg_zr1yzKjqtImY="
 # Dummy, non-functional -- tests override the AIProvider dependency with a
 # FakeAIProvider that never calls the real Anthropic SDK. This only needs to
 # satisfy the router's "is AI configured at all" presence check.

@@ -53,6 +53,24 @@ def test_production_accepts_two_distinct_strong_secrets() -> None:
     Settings(environment="production", **_base_kwargs())
 
 
+def test_missing_encryption_key_fails_to_boot_in_any_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression: encryption_key used to default to a real, valid, but
+    # publicly-known Fernet key, silently working in every environment
+    # except one spelled exactly "production" -- a deploy that simply
+    # forgot to set ENCRYPTION_KEY booted fine and encrypted every
+    # connector_credential/oauth_accounts token with a key anyone reading
+    # the source already knows. It must now fail to boot in *every*
+    # environment when omitted, the same way jwt_secret/database_url do,
+    # not just be rejected when it's the known placeholder.
+    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
+    kwargs = _base_kwargs()
+    del kwargs["encryption_key"]
+    with pytest.raises(ValidationError):
+        Settings(environment="development", _env_file=None, **kwargs)
+
+
 def test_malformed_encryption_key_is_rejected_in_any_environment() -> None:
     with pytest.raises(ValidationError, match="not a valid Fernet key"):
         Settings(environment="development", **_base_kwargs(encryption_key="not-a-fernet-key"))
