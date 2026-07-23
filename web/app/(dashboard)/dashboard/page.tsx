@@ -1,5 +1,6 @@
 "use client";
 
+import { ConnectBankButton } from "@/components/accounts/connect-bank-button";
 import { CreateAccountDialog } from "@/components/accounts/create-account-dialog";
 import { AIInsightsCard } from "@/components/dashboard/ai-insights-card";
 import { AllocationTile } from "@/components/dashboard/allocation-tile";
@@ -55,6 +56,7 @@ export default function DashboardPage() {
               Connect an account and bring in your history to see your full picture.
             </p>
             <div className="flex flex-col gap-2 pt-1 sm:flex-row lg:flex-col">
+              <ConnectBankButton />
               <CreateAccountDialog />
               <ImportCsvDialog />
             </div>
