@@ -106,14 +106,21 @@ class AuthService:
         token_row = self.refresh_tokens.get_by_jti(jti)
         if token_row is None:
             raise UnauthorizedError("Refresh token not recognized.")
-        if token_row.revoked_at is not None:
+
+        # try_revoke's WHERE revoked_at IS NULL makes "is this token still
+        # valid" and "revoke it" one atomic statement -- the only point
+        # that decides whether this call wins. A prior plain read-then-
+        # revoke here left a window where two concurrent requests
+        # presenting the same token could both read revoked_at as NULL and
+        # both proceed, each minting a valid session from what should have
+        # been detected as a reused/stolen token.
+        if not self.refresh_tokens.try_revoke(token_row):
             self.refresh_tokens.revoke_family(token_row.family_id)
             self.db.commit()
             raise UnauthorizedError(
                 "This refresh token was already used -- the session has been revoked."
             )
 
-        self.refresh_tokens.revoke(token_row)
         return self.issue_tokens(user_id, family_id=token_row.family_id)
 
     def revoke_refresh_token(self, presented_token: str) -> None:

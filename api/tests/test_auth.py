@@ -1,6 +1,12 @@
+import threading
+import uuid
+
 from fastapi.testclient import TestClient
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.user import User
+from app.repositories.refresh_token_repository import RefreshTokenRepository
 
 
 def _csrf_header(client: TestClient) -> dict[str, str]:
@@ -136,6 +142,54 @@ def test_reusing_an_already_rotated_refresh_token_is_rejected(
     client.cookies.set("finos_refresh_token", latest_cookie)
     follow_up = client.post("/api/v1/auth/refresh", headers=_csrf_header(client))
     assert follow_up.status_code == 401
+
+
+def test_concurrent_rotation_of_the_same_token_only_lets_one_caller_succeed(
+    db_session: Session, engine: Engine, test_user: User
+) -> None:
+    # Regression: rotate_refresh_token used to read revoked_at in Python,
+    # then write it in a separate statement -- two concurrent callers
+    # presenting the same not-yet-revoked token could both observe it as
+    # valid before either commit landed, and both would mint a session.
+    # try_revoke's WHERE revoked_at IS NULL makes read-and-decide one
+    # atomic statement, so exactly one of two concurrent callers must win.
+    token = RefreshTokenRepository(db_session).create(
+        user_id=test_user.id, jti=str(uuid.uuid4()), family_id=uuid.uuid4()
+    )
+    db_session.commit()
+    token_id = token.id
+
+    session_factory = sessionmaker(bind=engine)
+    barrier = threading.Barrier(2)
+    results: list[bool] = []
+    errors: list[Exception] = []
+    lock = threading.Lock()
+
+    def _try_revoke() -> None:
+        session = session_factory()
+        try:
+            row = session.get(type(token), token_id)
+            assert row is not None
+            barrier.wait(timeout=5)
+            won = RefreshTokenRepository(session).try_revoke(row)
+            session.commit()
+            with lock:
+                results.append(won)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+        finally:
+            session.close()
+
+    threads = [threading.Thread(target=_try_revoke) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors, f"concurrent try_revoke() calls raised: {errors}"
+    assert sorted(results) == [False, True], (
+        f"exactly one concurrent caller must win the race to revoke a token -- got {results}"
+    )
 
 
 def test_login_is_rate_limited_after_repeated_attempts(client: TestClient, test_user: User) -> None:
