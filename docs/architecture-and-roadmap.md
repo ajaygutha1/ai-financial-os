@@ -1114,18 +1114,144 @@ possible in this environment (no Playwright/chromium driver installed) --
 the frontend change was verified via a clean `tsc --noEmit` and `eslint`
 pass plus the backend HTTP flow it targets, not a driven browser session.
 
+## Milestone 9 — Detailed Implementation Plan (built and verified)
+
+Goal: swap the Milestone 2 stub connectors for a real integration -- scoped
+down to **Plaid only** (Coinbase and Robinhood stay stubs) after research
+found Robinhood has no public third-party developer API at all, so a "real"
+connector there was never actually buildable the way the original roadmap
+line implied. Scoped explicitly with the user before writing code: Plaid
+only, sandbox environment, and the user provisions their own free sandbox
+credentials (dashboard.plaid.com) rather than the assistant guessing at
+values that don't exist yet.
+
+### The Item-vs-Account mismatch, and how the existing protocol absorbed it
+
+Milestone 2's `Connector` protocol docstring predicted this swap would be
+"a new file implementing this same protocol, not a redesign" -- true, but
+only after resolving one real mismatch: every stub connector is
+constructed from a single `external_account_id` (one connector instance =
+one account), while Plaid's `/transactions/sync` operates at the *Item*
+level (one access token can back several linked accounts at once), and
+`SyncService`/`SyncJob` sync exactly one `Account` per call. Rather than
+redesign the sync task to operate on Items, `PlaidConnector` is
+constructed per `(access_token, external_account_id)` and filters the
+Item-wide response down to the one account being synced. Each linked
+account under the same Item therefore re-fetches the same delta window
+from Plaid independently -- redundant but harmless, since Plaid's sync
+cursor is stateless/idempotent from the caller's side -- and it meant zero
+changes to the existing per-account Celery task or `SyncJob` model.
+
+This same Item/Account distinction is also why `ConnectorCredential`'s
+unique constraint was widened from `(user_id, provider)` to `(user_id,
+provider, external_item_id)`: a user linking a second bank via Plaid is an
+ordinary case, and the old constraint -- never previously exercised by any
+real code path -- would have rejected it outright. `Account` gained a
+nullable `connector_credential_id` FK (`ON DELETE SET NULL`, so unlinking a
+bank orphans the link rather than deleting transaction history the user
+still owns).
+
+### PlaidClient: real, fake, and the sign-convention gotcha
+
+Mirrors the `AIProvider` adapter pattern from Milestone 4 exactly: a
+`PlaidClient` ABC, a `RealPlaidClient` wrapping the official `plaid-python`
+SDK (the only module allowed to `import plaid`), and a `FakePlaidClient`
+test double scriptable per access token. One real bug this would have
+caused in production if missed: **Plaid's transaction amount sign
+convention is the opposite of this codebase's** (positive = outflow for
+Plaid; negative = outflow everywhere in this codebase, per `RawTransaction`'s
+own docstring since Milestone 2) -- `PlaidConnector` flips the sign
+explicitly rather than passing amounts through, with the mismatch called
+out in both dataclasses' docstrings so it can't get silently re-introduced
+by a future edit.
+
+`/transactions/sync`'s `removed` array (Plaid's signal that a pending
+transaction was superseded, or a transaction was deleted upstream) is
+logged, not acted on -- the shared normalization pipeline has no deletion
+path, and retrofitting one is bigger than this milestone's scope. Documented
+as a deliberate limitation, the same way Forecast and `debt_payoff`'s
+naive-projection caveats were documented in Milestone 7 rather than silently
+shipped.
+
+### Link flow and webhook
+
+`POST /connectors/plaid/link-token` and `/exchange` implement the standard
+Plaid Link handshake: exchange the public token for a real access token
+(encrypted at rest transparently via Milestone 8's `EncryptedString`),
+create a `ConnectorCredential`, and create or refresh one `Account` per
+Plaid account returned for that Item -- idempotently, so Link's update-mode
+re-linking flow doesn't duplicate accounts or credentials.
+
+`POST /connectors/plaid/webhook` receives Plaid's push notifications with
+**full cryptographic verification** before trusting anything in the
+payload, per Plaid's documented process: extract the `kid` from the
+unverified JWT header, fetch that signing key via
+`/webhook_verification_key/get`, verify the ES256 signature against the
+fetched public JWK, reject a stale `iat` (replay protection, Plaid's own
+5-minute tolerance), and confirm the signed `request_body_sha256` claim
+matches the actual raw request body. Only `SYNC_UPDATES_AVAILABLE` (the
+`/transactions/sync`-era webhook code that actually matters) resolves the
+Item to its linked accounts and enqueues the existing `sync_account`
+Celery task per account; other webhook codes are logged and ignored rather
+than handled, since this integration doesn't use the products they cover.
+
+`build_connector_for_account` now branches on whether an account has a
+linked `connector_credential_id`: if so, it decrypts the stored access
+token and builds a real `PlaidConnector`; otherwise it falls back to the
+Milestone 2 stub factories exactly as before, so every pre-existing
+demo/test account keeps working unchanged.
+
+### Frontend
+
+A `ConnectBankButton` on the dashboard's "Get started" card wraps
+`react-plaid-link`: fetch a link token, open Link, and on success POST the
+public token (plus the institution name Link's own success metadata
+already carries, avoiding an extra API round trip to resolve it) to
+`/exchange`, then invalidate the accounts/net-worth queries.
+
+### Testing and verification
+
+36 new tests (278 total): `PlaidConnector` account/transaction filtering
+and the sign flip; `RealPlaidClient`'s Plaid-subtype-to-`AccountType`
+mapping and environment validation; the Link-flow endpoints (token
+creation, exchange creating/refreshing credentials and accounts,
+idempotent re-linking); `build_connector_for_account`'s real-vs-stub
+branching; and webhook verification exercised with a **real, generated
+EC keypair** -- signing a JWT with the private key and verifying it with
+the fetched public JWK, not mocked around, plus rejection cases for a
+missing header, tampered body, stale `iat`, wrong signing key, and a
+malformed header.
+
+Backend: 278 tests passing, ruff + ruff format + mypy --strict clean.
+Frontend: lint/typecheck/`next build` clean; the web Docker image needed a
+rebuild plus `--renew-anon-volumes` to pick up the new dependency, since
+the compose setup pins `node_modules` to an anonymous volume separate from
+the source bind mount. Live-verified what's testable without real
+credentials: the webhook's full JWT signature/replay/body-hash
+verification (via generated keypairs, not Plaid's actual sandbox), and
+that both the `api` and `web` containers boot cleanly with all the new
+code and dependencies. **Not yet live-tested against real Plaid Sandbox**
+-- that requires the user's own sandbox `client_id`/`secret` in `.env`,
+which per the scoping decision at the start of this milestone is
+provisioned by the user rather than guessed at; the actual Link ->
+exchange -> sync -> webhook round trip against Plaid's real sandbox
+institutions is the next verification step once those credentials exist.
+
 ## After approval
 
-M1 through M8 are all built and verified end-to-end (242 tests passing,
-mypy --strict and ruff clean on the backend, lint and typecheck clean on the
-frontend, full Docker Compose stack, and the dashboard manually driven
-end-to-end in a real browser against realistic demo data through M7,
-including a genuine cross-session SSE live-update). A few specifics were
-refined during hands-on M2 implementation versus the original spec:
-`ofxparse` was used over `ofxtools` for OFX parsing; the shared `imports.py`
-schema replaced the CSV-only `csv_import.py` once OFX needed the same
-response shape; the audit-log immutability trigger also covers `TRUNCATE` (a
-separate Postgres trigger event that a bare `DELETE` trigger doesn't catch);
-and four DB-backed pipeline lookups (dedup, merchant resolution,
-transfer/refund matching) were bundled into a single `PipelineDependencies`
-object rather than four growing callback parameters.
+M1 through M9 are all built and verified end-to-end at the unit/integration
+level (278 tests passing, mypy --strict and ruff clean on the backend, lint
+and typecheck clean on the frontend, full Docker Compose stack, and the
+dashboard manually driven end-to-end in a real browser against realistic
+demo data through M7, including a genuine cross-session SSE live-update).
+Milestone 9's real Plaid integration is code-complete and unit-tested but
+not yet exercised against Plaid's actual sandbox -- see that milestone's
+note above. A few specifics were refined during hands-on M2 implementation
+versus the original spec: `ofxparse` was used over `ofxtools` for OFX
+parsing; the shared `imports.py` schema replaced the CSV-only
+`csv_import.py` once OFX needed the same response shape; the audit-log
+immutability trigger also covers `TRUNCATE` (a separate Postgres trigger
+event that a bare `DELETE` trigger doesn't catch); and four DB-backed
+pipeline lookups (dedup, merchant resolution, transfer/refund matching)
+were bundled into a single `PipelineDependencies` object rather than four
+growing callback parameters.
