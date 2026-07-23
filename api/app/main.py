@@ -15,6 +15,7 @@ from app.routers.v1 import (
     auth,
     budget,
     categories,
+    connectors,
     events,
     goals,
     imports,
@@ -56,6 +57,7 @@ def create_app() -> FastAPI:
     app.include_router(categories.router, prefix="/api/v1")
     app.include_router(events.router, prefix="/api/v1")
     app.include_router(admin.router, prefix="/api/v1")
+    app.include_router(connectors.router, prefix="/api/v1")
 
     @app.get("/health")
     def health() -> dict[str, str]:

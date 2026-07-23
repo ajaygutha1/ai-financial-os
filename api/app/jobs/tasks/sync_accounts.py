@@ -4,24 +4,29 @@ from collections.abc import Callable
 
 from celery import Task
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.ingestion.connectors.base import Connector
 from app.ingestion.connectors.coinbase_stub import CoinbaseStubConnector
+from app.ingestion.connectors.plaid.dependency import get_plaid_client
+from app.ingestion.connectors.plaid_connector import PlaidConnector
 from app.ingestion.connectors.plaid_stub import PlaidStubConnector
 from app.ingestion.connectors.robinhood_stub import RobinhoodStubConnector
 from app.jobs.celery_app import celery_app
 from app.models.account import Account, AccountSource
+from app.repositories.connector_credential_repository import ConnectorCredentialRepository
 from app.services.sync_service import SyncService
 
 logger = logging.getLogger(__name__)
 
-# Stub connectors only, for now -- swapping in real Plaid/Coinbase/Robinhood
-# connectors in Milestone 9 means adding entries here, not redesigning the
-# task, since every connector already implements the same protocol. Typed as
-# Callable (not type[Connector]) since Connector is a Protocol -- a static
-# type checker won't let you "instantiate a Protocol," even though these are
-# all concrete, perfectly instantiable classes at runtime.
+# Stub connectors, used whenever an account has no real linked credential --
+# still the only path for Coinbase/Robinhood (Milestone 9 only builds a real
+# connector for Plaid) and for any legacy/demo Plaid-sourced account created
+# before real linking existed. Typed as Callable (not type[Connector]) since
+# Connector is a Protocol -- a static type checker won't let you
+# "instantiate a Protocol," even though these are all concrete, perfectly
+# instantiable classes at runtime.
 _CONNECTOR_FACTORIES: dict[str, Callable[[str], Connector]] = {
     AccountSource.PLAID.value: PlaidStubConnector,
     AccountSource.COINBASE.value: CoinbaseStubConnector,
@@ -29,12 +34,25 @@ _CONNECTOR_FACTORIES: dict[str, Callable[[str], Connector]] = {
 }
 
 
-def build_connector_for_account(account: Account) -> Connector:
+def build_connector_for_account(account: Account, db: Session) -> Connector:
+    if not account.external_account_id:
+        raise ValueError("Account has no external_account_id to sync against.")
+
+    if account.source == AccountSource.PLAID.value and account.connector_credential_id is not None:
+        credential = ConnectorCredentialRepository(db).get_by_id(account.connector_credential_id)
+        if credential is None or credential.access_token_enc is None:
+            raise ValueError(
+                f"Account {account.id} has no usable Plaid credential to sync against."
+            )
+        return PlaidConnector(
+            get_plaid_client(),
+            access_token=credential.access_token_enc,
+            external_account_id=account.external_account_id,
+        )
+
     factory = _CONNECTOR_FACTORIES.get(account.source)
     if factory is None:
         raise ValueError(f"No connector available for account source '{account.source}'")
-    if not account.external_account_id:
-        raise ValueError("Account has no external_account_id to sync against.")
     return factory(account.external_account_id)
 
 
@@ -51,7 +69,7 @@ def sync_account(self: Task, account_id: str) -> None:
             logger.warning("sync_account: account %s not found, skipping", account_id)
             return
 
-        connector = build_connector_for_account(account)
+        connector = build_connector_for_account(account, db)
         # SyncService.run_sync's own idempotency guard keys off this exact
         # (account, cursor) pairing -- a retried attempt with an unchanged
         # cursor maps to the same key and short-circuits safely.
